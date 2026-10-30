@@ -23,19 +23,16 @@ try {
 export interface Esp32Unit {
   unitId: number;
   name: string;
-  role: string;
   ip: string;
   online: boolean;
   playing: boolean;
-  relayMask: number; // 16-bit bitmask: bit 0..7 = LED Strip Sets (CH1-8), bit 8..15 = Christmas Sets (CH9-16)
 }
 
-export interface ChoreographyTrack {
-  id: number;
-  title: string;
-  subtitle: string;
-  stepMs: number;
-  badge: string;
+export interface EspPattern {
+  id: string;
+  label: string;
+  description: string;
+  reactive: boolean;
 }
 
 export interface TelemetryLog {
@@ -45,264 +42,89 @@ export interface TelemetryLog {
   text: string;
 }
 
-const STEP_MS = 180; // Exact STEP_MS from MusicLightSync_ESP32.ino
-
-const CHOREOGRAPHY_TRACKS: ChoreographyTrack[] = [
-  {
-    id: 1,
-    title: 'MusicLightSync: Party Alternating + Music Reactive',
-    subtitle:
-      'Exact MusicLightSync_ESP32.ino (STEP_MS=180ms • Strips CH1–8 & Xmas CH9–16)',
-    stepMs: 180,
-    badge: 'EXACT .INO',
-  },
-  {
-    id: 2,
-    title: '10-Unit MusicLightSync Multi-Effect Show',
-    subtitle:
-      'Each ESP32 plays a distinct MusicLightSync_ESP32 effect (Party, Soundwave, Twinkle, Chase)',
-    stepMs: 180,
-    badge: '10 EFFECTS',
-  },
-  {
-    id: 3,
-    title: 'LED Strips Reactive (1–8) + Xmas Twinkle (9–16)',
-    subtitle:
-      'Board A runs Music Reactive Pulse while Board B runs Christmas Twinkle Sparkle',
-    stepMs: 180,
-    badge: 'DUAL BANK',
-  },
-  {
-    id: 4,
-    title: '10-Unit Christmas Stadium Wave Cascade',
-    subtitle:
-      'Phase-shifted MusicLightSync_ESP32 wave cascading from UNIT-01 to UNIT-10',
-    stepMs: 180,
-    badge: 'CASCADE',
-  },
-];
-
 const INITIAL_UNITS: Esp32Unit[] = [
+  { unitId: 1, name: 'UNIT-01', ip: '10.241.48.101', online: false, playing: false },
+  { unitId: 2, name: 'UNIT-02', ip: '10.241.48.102', online: false, playing: false },
+  { unitId: 3, name: 'UNIT-03', ip: '10.241.48.103', online: false, playing: false },
+  { unitId: 4, name: 'UNIT-04', ip: '10.241.48.104', online: false, playing: false },
+  { unitId: 5, name: 'UNIT-05', ip: '10.241.48.105', online: false, playing: false },
+  { unitId: 6, name: 'UNIT-06', ip: '10.241.48.106', online: false, playing: false },
+  { unitId: 7, name: 'UNIT-07', ip: '10.241.48.107', online: false, playing: false },
+  { unitId: 8, name: 'UNIT-08', ip: '10.241.48.108', online: false, playing: false },
+  { unitId: 9, name: 'UNIT-09', ip: '10.241.48.109', online: false, playing: false },
+  { unitId: 10, name: 'UNIT-10', ip: '10.241.48.110', online: false, playing: false },
+];
+
+// Exact 10 built-in patterns from the ESP32 relay pattern engine
+const ESP32_PATTERNS: EspPattern[] = [
   {
-    unitId: 1,
-    name: 'UNIT-01',
-    role: 'Party Alternating + Music Reactive (MusicLightSync)',
-    ip: '10.241.48.101',
-    online: false,
-    playing: false,
-    relayMask: 0,
+    id: 'combo_adaptive',
+    label: 'Combo Master (All Combos Showcase)',
+    description:
+      'Showcases all 10 light combos (Wave L→R, Center In/Out, Ping-Pong, Bounce Pair, Comet, DJ Shuffle, Accordion, 16ch Waterfall, Sparkle) locked in sync with the beat',
+    reactive: true,
   },
   {
-    unitId: 2,
-    name: 'UNIT-02',
-    role: 'Music Reactive + Soundwave Pulse',
-    ip: '10.241.48.102',
-    online: false,
-    playing: false,
-    relayMask: 0,
+    id: 'wave_lr',
+    label: 'Wave L→R (Sweeping Bar)',
+    description: 'Progressive wave sweeping across the 8-channel relay banks',
+    reactive: false,
   },
   {
-    unitId: 3,
-    name: 'UNIT-03',
-    role: 'Twinkle + Sparkle Playful',
-    ip: '10.241.48.103',
-    online: false,
-    playing: false,
-    relayMask: 0,
+    id: 'center_in',
+    label: 'Center In (Edges to Middle)',
+    description: 'Both outer edges sweep inward toward the middle',
+    reactive: false,
   },
   {
-    unitId: 4,
-    name: 'UNIT-04',
-    role: 'Wave + Comet Flow Chase',
-    ip: '10.241.48.104',
-    online: false,
-    playing: false,
-    relayMask: 0,
+    id: 'center_out',
+    label: 'Center Out (Middle to Edges)',
+    description: 'Middle spreads outward toward both outer edges',
+    reactive: false,
   },
   {
-    unitId: 5,
-    name: 'UNIT-05',
-    role: 'Outer-to-Middle Christmas Sweep',
-    ip: '10.241.48.105',
-    online: false,
-    playing: false,
-    relayMask: 0,
+    id: 'ping_pong',
+    label: 'Ping Pong (Bouncing Bar)',
+    description: 'Left ↔ Right continuous bouncing sweep across channels',
+    reactive: false,
   },
   {
-    unitId: 6,
-    name: 'UNIT-06',
-    role: 'LED Strip Chase (1–8) + Xmas Twinkle (9–16)',
-    ip: '10.241.48.106',
-    online: false,
-    playing: false,
-    relayMask: 0,
+    id: 'bounce_pair',
+    label: 'Bounce Pair (2-Relay Pair)',
+    description: '2-relay pair bouncing Left ↔ Right across channels',
+    reactive: false,
   },
   {
-    unitId: 7,
-    name: 'UNIT-07',
-    role: 'LED Strip Party (1–8) + Xmas Soundwave (9–16)',
-    ip: '10.241.48.107',
-    online: false,
-    playing: false,
-    relayMask: 0,
+    id: 'end_meet',
+    label: 'End Meet (Inward Sweep & Center Burst)',
+    description:
+      'Sweeps left-to-right, then both outer ends meet at center and burst outward with music bloom',
+    reactive: true,
   },
   {
-    unitId: 8,
-    name: 'UNIT-08',
-    role: 'LED Strip Soundwave (1–8) + Xmas Sweep (9–16)',
-    ip: '10.241.48.108',
-    online: false,
-    playing: false,
-    relayMask: 0,
+    id: 'sparkle',
+    label: 'Sparkle / Playful (Random Flashes)',
+    description: 'Twinkle and playful random multi-relay flashes across 16 channels',
+    reactive: false,
   },
   {
-    unitId: 9,
-    name: 'UNIT-09',
-    role: 'Bass Flash + Beat Strobe Shuffle',
-    ip: '10.241.48.109',
-    online: false,
-    playing: false,
-    relayMask: 0,
+    id: 'chase3',
+    label: 'Chase 3 (Running Trail)',
+    description: '3-relay continuous chasing trail across channels',
+    reactive: false,
   },
   {
-    unitId: 10,
-    name: 'UNIT-10',
-    role: 'Grand Finale Auto-DJ Mix (All Effects)',
-    ip: '10.241.48.110',
-    online: false,
-    playing: false,
-    relayMask: 0,
+    id: 'alternate',
+    label: 'Alternate (Odd / Even & Party Beat)',
+    description:
+      'Odd vs Even relays alternating on step, with an all-strip hit every 8th step',
+    reactive: false,
   },
 ];
 
-// Exact port of effectWantsOn() from MusicLightSync_ESP32.ino
-function evalEffectString(effectName: string, i: number, step: number): boolean {
-  const local = i % 8;
-  const side = Math.floor(i / 8);
-  if (effectName.includes('Steady On')) return true;
-  if (
-    effectName.includes('Strobe') ||
-    effectName.includes('Bass Flash') ||
-    effectName.includes('Beat On/Off')
-  ) {
-    return step % 2 === 0;
-  }
-  if (
-    effectName.includes('Alternating') ||
-    effectName.includes('Party') ||
-    effectName.includes('Beat Shuffle') ||
-    effectName.includes('DJ Mix')
-  ) {
-    return local % 2 === step % 2 || step % 8 === 0;
-  }
-  if (
-    effectName.includes('Chase') ||
-    effectName.includes('Wave') ||
-    effectName.includes('Comet') ||
-    effectName.includes('Sweep') ||
-    effectName.includes('Flow')
-  ) {
-    return local === step % 8;
-  }
-  if (
-    effectName.includes('Twinkle') ||
-    effectName.includes('Sparkle') ||
-    effectName.includes('Playful')
-  ) {
-    return (step * 7 + i * 3) % 5 < 2;
-  }
-  if (
-    effectName.includes('Bass') ||
-    effectName.includes('Music Reactive') ||
-    effectName.includes('Fusion') ||
-    effectName.includes('Soundwave') ||
-    effectName.includes('Pulse')
-  ) {
-    return (step + local + side) % 4 !== 0;
-  }
-  const pos = step % 16 < 8 ? step % 8 : 7 - (step % 8);
-  return local === pos;
-}
-
-function getUnitEffectForChannel(
-  unitId: number,
-  i: number,
-  step: number
-): string {
-  const side = Math.floor(i / 8);
-  switch (unitId) {
-    case 1:
-      return 'Party Alternating + Music Reactive';
-    case 2:
-      return 'Music Reactive Soundwave Pulse';
-    case 3:
-      return 'Twinkle Sparkle Playful';
-    case 4:
-      return 'Wave Comet Chase Flow';
-    case 5:
-      return 'Default Outer-Middle';
-    case 6:
-      return side === 0 ? 'Wave Chase' : 'Twinkle Sparkle';
-    case 7:
-      return side === 0 ? 'Party Alternating' : 'Music Reactive Soundwave';
-    case 8:
-      return side === 0 ? 'Music Reactive Pulse' : 'Default Outer-Middle';
-    case 9:
-      return step % 16 < 12 ? 'Party Alternating' : 'Bass Flash Strobe';
-    case 10:
-    default: {
-      const phase = Math.floor(step / 16) % 5;
-      if (phase === 0) return 'Party Alternating';
-      if (phase === 1) return 'Music Reactive Soundwave';
-      if (phase === 2) return 'Twinkle Sparkle';
-      if (phase === 3) return 'Wave Chase';
-      return 'Default Outer-Middle';
-    }
-  }
-}
-
-function computeUnitRelayMask16(
-  unitId: number,
-  elapsedMs: number,
-  trackId: number
-): number {
-  let stepNumber = Math.floor(elapsedMs / STEP_MS) + 1;
-  if (trackId === 4) {
-    stepNumber += unitId - 1;
-  }
-
-  let mask = 0;
-  for (let i = 0; i < 16; i++) {
-    let on = false;
-    if (trackId === 1) {
-      if (Math.floor(stepNumber / 16) % 2 === 0) {
-        on = evalEffectString(
-          'Party Alternating + Music Reactive',
-          i,
-          stepNumber
-        );
-      } else {
-        on = evalEffectString('Music Reactive', i, stepNumber);
-      }
-    } else if (trackId === 2) {
-      const eff = getUnitEffectForChannel(unitId, i, stepNumber);
-      on = evalEffectString(eff, i, stepNumber);
-    } else if (trackId === 3) {
-      const eff = i < 8 ? 'Music Reactive' : 'Twinkle Sparkle';
-      on = evalEffectString(eff, i, stepNumber);
-    } else {
-      on = evalEffectString(
-        'Party Alternating + Music Reactive',
-        i,
-        stepNumber
-      );
-    }
-    if (on) {
-      mask |= 1 << i;
-    }
-  }
-  return mask;
-}
+const MIN_SPEED_MS = 100;
+const MAX_SPEED_MS = 600;
+const SPEED_PRESETS_MS = [120, 160, 200, 240, 300, 400];
 
 async function fetchWithTimeout(
   url: string,
@@ -320,24 +142,59 @@ async function fetchWithTimeout(
 
 export default function App() {
   const [units, setUnits] = useState<Esp32Unit[]>(INITIAL_UNITS);
-  const [selectedTrackId, setSelectedTrackId] = useState<number>(1);
-  const [isMasterPlaying, setIsMasterPlaying] = useState<boolean>(false);
-  const [isScanning, setIsScanning] = useState<boolean>(false);
   const [subnetPrefix, setSubnetPrefix] = useState<string>('10.241.48');
   const [editingUnitId, setEditingUnitId] = useState<number | null>(null);
   const [editingIpText, setEditingIpText] = useState<string>('');
+  const [isScanning, setIsScanning] = useState<boolean>(false);
+  const [isPlaying, setIsPlaying] = useState<boolean>(false);
+  const [selectedPattern, setSelectedPattern] =
+    useState<string>('combo_adaptive');
+  const [speedMode, setSpeedMode] = useState<'auto' | 'manual'>('auto');
+  const [stepMs, setStepMs] = useState<number>(220);
+  const [liveStepMs, setLiveStepMs] = useState<number>(220);
+  const [isDraggingSpeed, setIsDraggingSpeed] = useState<boolean>(false);
+  const [musicMetrics, setMusicMetrics] = useState<{
+    b: number;
+    bt: number;
+    r: number;
+  }>({ b: 0, bt: 0, r: 0 });
   const [logs, setLogs] = useState<TelemetryLog[]>(() => [
     {
       id: 'init-1',
       timestamp: new Date().toLocaleTimeString(),
       direction: 'SYS',
-      text: 'Loaded 2026 Christmas Lighting Songs.mp3 + MusicLightSync (180ms)',
+      text: 'Ready — Scan DunkinNetwork hotspot to sync all ESP32s with music',
     },
   ]);
 
-  const showStartRef = useRef<number>(0);
-  const audioOffsetMsRef = useRef<number>(0);
   const webViewRef = useRef<any>(null);
+  const unitsRef = useRef<Esp32Unit[]>(units);
+  const selectedPatternRef = useRef<string>(selectedPattern);
+  const speedModeRef = useRef<'auto' | 'manual'>('auto');
+  const stepMsRef = useRef<number>(stepMs);
+  const sliderWidthRef = useRef<number>(260);
+  const lastSpeedBroadcastRef = useRef<number>(0);
+  const detectedSubnetsRef = useRef<Set<string>>(new Set());
+  const musicStreamBusyRef = useRef<boolean>(false);
+
+  useEffect(() => {
+    unitsRef.current = units;
+  }, [units]);
+
+  useEffect(() => {
+    selectedPatternRef.current = selectedPattern;
+  }, [selectedPattern]);
+
+  useEffect(() => {
+    speedModeRef.current = speedMode;
+  }, [speedMode]);
+
+  useEffect(() => {
+    stepMsRef.current = stepMs;
+    if (!isPlaying) {
+      setLiveStepMs(stepMs);
+    }
+  }, [stepMs, isPlaying]);
 
   const addLog = useCallback(
     (direction: 'TX' | 'RX' | 'SYS', text: string) => {
@@ -347,49 +204,287 @@ export default function App() {
         direction,
         text,
       };
-      setLogs((prev) => [entry, ...prev.slice(0, 19)]);
+      setLogs((prev) => [entry, ...prev.slice(0, 14)]);
     },
     []
   );
 
-  const onlineCount = units.filter((u) => u.online).length;
+  const onlineUnits = units.filter((u) => u.online);
+  const onlineCount = onlineUnits.length;
 
-  // Ping a single ESP32 unit via GET http://<ip>/status
-  const pingSingleUnit = useCallback(
-    async (unit: Esp32Unit): Promise<boolean> => {
-      try {
-        const res = await fetchWithTimeout(`http://${unit.ip}/status`, 1000);
-        if (!res.ok) return false;
-        const data = await res.json();
-        setUnits((prev) =>
-          prev.map((u) =>
-            u.unitId === unit.unitId
-              ? {
-                  ...u,
-                  online: true,
-                  playing: Boolean(data.playing),
-                  relayMask:
-                    typeof data.relayMask === 'number' ? data.relayMask : 0,
-                }
-              : u
-          )
-        );
-        return true;
-      } catch {
-        setUnits((prev) =>
-          prev.map((u) =>
-            u.unitId === unit.unitId
-              ? { ...u, online: false, playing: false }
-              : u
-          )
-        );
-        return false;
+  // Ping a single ESP32 unit (/ping or /status) without toggling any relays
+  const pingSingleUnit = useCallback(async (unit: Esp32Unit): Promise<boolean> => {
+    try {
+      const res = await fetchWithTimeout(`http://${unit.ip}/ping`, 1000);
+      if (!res.ok) return false;
+      const data = await res.json();
+      setUnits((prev) =>
+        prev.map((u) =>
+          u.unitId === unit.unitId
+            ? {
+                ...u,
+                online: true,
+                playing: Boolean(data.running ?? data.playing),
+              }
+            : u
+        )
+      );
+      return true;
+    } catch {
+      setUnits((prev) =>
+        prev.map((u) =>
+          u.unitId === unit.unitId ? { ...u, online: false, playing: false } : u
+        )
+      );
+      return false;
+    }
+  }, []);
+
+  // Broadcast PLAY + pattern + speed to ALL ESP32 units simultaneously
+  const broadcastPlayAll = useCallback(
+    async (pat?: string, ms?: number) => {
+      const patternToUse = pat || selectedPatternRef.current;
+      const speedToUse = ms || stepMsRef.current;
+      const currentUnits = unitsRef.current;
+
+      const results = await Promise.all(
+        currentUnits.map(async (u) => {
+          try {
+            const res = await fetchWithTimeout(
+              `http://${u.ip}/play?pattern=${encodeURIComponent(
+                patternToUse
+              )}&ms=${speedToUse}&auto=${speedModeRef.current === 'auto' ? 1 : 0}`,
+              1200
+            );
+            if (res.ok) {
+              setUnits((prev) =>
+                prev.map((item) =>
+                  item.unitId === u.unitId
+                    ? { ...item, online: true, playing: true }
+                    : item
+                )
+              );
+              return true;
+            }
+          } catch {
+            // offline
+          }
+          return false;
+        })
+      );
+
+      const synced = results.filter(Boolean).length;
+      addLog(
+        'TX',
+        `PLAY synced on ${synced}/${currentUnits.length} ESP32s (${patternToUse}, ${speedToUse}ms)`
+      );
+    },
+    [addLog]
+  );
+
+  // Broadcast STOP to ALL ESP32 units simultaneously (all relays OFF)
+  const broadcastStopAll = useCallback(async () => {
+    const currentUnits = unitsRef.current;
+    setUnits((prev) => prev.map((u) => ({ ...u, playing: false })));
+    await Promise.all(
+      currentUnits.map(async (u) => {
+        try {
+          const res = await fetchWithTimeout(`http://${u.ip}/stop`, 1200);
+          if (res.ok) {
+            setUnits((prev) =>
+              prev.map((item) =>
+                item.unitId === u.unitId
+                  ? { ...item, online: true, playing: false }
+                  : item
+              )
+            );
+          }
+        } catch {
+          // ignore offline
+        }
+      })
+    );
+    addLog('TX', 'STOP broadcast >> All ESP32 relays OFF');
+  }, [addLog]);
+
+  // Ping all configured ESP32 unit IPs (no relay testing)
+  const handlePingAllUnits = async () => {
+    setIsScanning(true);
+    addLog('TX', 'Pinging all 10 ESP32 units (/ping)...');
+    const results = await Promise.all(units.map((u) => pingSingleUnit(u)));
+    const count = results.filter(Boolean).length;
+    setIsScanning(false);
+    addLog('RX', `Ping complete: ${count}/10 ESP32 units online`);
+  };
+
+  // Multi-ESP32 Hotspot Scanner: discovers all ESP32s on any phone hotspot subnet
+  const handleScanHotspot = async () => {
+    setIsScanning(true);
+    webViewRef.current?.injectJavaScript?.(
+      'window.detectPhoneHotspotSubnets && window.detectPhoneHotspotSubnets();'
+    );
+
+    const rawInput = subnetPrefix.trim().replace(/\.$/, '');
+    const inputParts = rawInput.split('.');
+    const cleanPrefix =
+      inputParts.length >= 4
+        ? `${inputParts[0]}.${inputParts[1]}.${inputParts[2]}`
+        : rawInput;
+    const explicitFullIp = inputParts.length === 4 ? rawInput : null;
+    if (cleanPrefix !== subnetPrefix) {
+      setSubnetPrefix(cleanPrefix);
+    }
+
+    addLog('SYS', `Scanning hotspot subnet ${cleanPrefix}.x for ESP32 units...`);
+
+    const discoveredIps = new Set<string>();
+    const claimedSlots = new Map<number, string>();
+    const learnedSubnets = new Set<string>();
+
+    const assignDiscoveredUnit = (
+      ip: string,
+      reportedUnitId: number | null,
+      playing: boolean
+    ) => {
+      if (discoveredIps.has(ip)) return;
+      discoveredIps.add(ip);
+
+      const p = ip.trim().split('.');
+      if (p.length === 4) {
+        const sub = `${p[0]}.${p[1]}.${p[2]}`;
+        learnedSubnets.add(sub);
+        setSubnetPrefix(sub);
       }
-    },
-    []
-  );
 
-  // Quick ping of all 10 configured ESP32 unit IPs on mount
+      let targetSlot =
+        reportedUnitId && reportedUnitId >= 1 && reportedUnitId <= 10
+          ? reportedUnitId
+          : 1;
+
+      if (claimedSlots.has(targetSlot) && claimedSlots.get(targetSlot) !== ip) {
+        for (let slot = 1; slot <= 10; slot++) {
+          if (!claimedSlots.has(slot)) {
+            targetSlot = slot;
+            break;
+          }
+        }
+      }
+      claimedSlots.set(targetSlot, ip);
+
+      setUnits((prev) =>
+        prev.map((u) =>
+          u.unitId === targetSlot
+            ? { ...u, ip, online: true, playing }
+            : u
+        )
+      );
+
+      const slotName = `UNIT-${targetSlot < 10 ? '0' : ''}${targetSlot}`;
+      addLog('RX', `✓ Connected ${slotName} at ${ip}`);
+
+      // Push current pattern & speed to newly discovered unit
+      fetchWithTimeout(
+        `http://${ip}/pattern?name=${encodeURIComponent(
+          selectedPatternRef.current
+        )}`,
+        800
+      ).catch(() => {});
+      fetchWithTimeout(`http://${ip}/speed?ms=${stepMsRef.current}`, 800).catch(
+        () => {}
+      );
+    };
+
+    const probeHost = async (hostOrIp: string, timeout = 800) => {
+      try {
+        const res = await fetchWithTimeout(`http://${hostOrIp}/ping`, timeout);
+        if (res.ok) {
+          const data = await res.json();
+          const realIp =
+            typeof data.ip === 'string' && data.ip.split('.').length === 4
+              ? data.ip
+              : hostOrIp;
+          const uid = typeof data.unitId === 'number' ? data.unitId : null;
+          assignDiscoveredUnit(
+            realIp,
+            uid,
+            Boolean(data.running ?? data.playing)
+          );
+        }
+      } catch {
+        // ignore
+      }
+    };
+
+    // Phase 1: Probe mDNS & configured unit IPs
+    const mdnsHosts: string[] = ['dunkin-esp32.local'];
+    for (let u = 1; u <= 10; u++) {
+      const pad = u < 10 ? `0${u}` : `${u}`;
+      mdnsHosts.push(`dunkin-u${pad}.local`);
+    }
+    const fastTargets = Array.from(
+      new Set([
+        ...(explicitFullIp ? [explicitFullIp] : []),
+        ...units.map((u) => u.ip).filter(Boolean),
+        ...mdnsHosts,
+      ])
+    );
+
+    await Promise.all(fastTargets.map((t) => probeHost(t, 1000)));
+
+    // Phase 2: Sweep hotspot subnets for all ESP32s (.2 .. .254)
+    const candidateSubnets = Array.from(
+      new Set([
+        ...Array.from(learnedSubnets),
+        ...Array.from(detectedSubnetsRef.current),
+        cleanPrefix,
+        '192.168.43',
+        '192.168.137',
+        '192.168.50',
+        '192.168.4',
+        '192.168.8',
+        '192.168.1',
+        '172.20.10',
+      ])
+    ).filter((s) => s.split('.').length === 3);
+
+    const sweepSubnet = async (sub: string) => {
+      const ips: string[] = [];
+      for (let h = 2; h <= 254; h++) {
+        const ip = `${sub}.${h}`;
+        if (!discoveredIps.has(ip)) {
+          ips.push(ip);
+        }
+      }
+      const batchSize = 20;
+      for (let i = 0; i < ips.length; i += batchSize) {
+        const batch = ips.slice(i, i + batchSize);
+        await Promise.all(batch.map((ip) => probeHost(ip, 700)));
+      }
+    };
+
+    const primarySub = candidateSubnets[0] || cleanPrefix;
+    await sweepSubnet(primarySub);
+
+    if (discoveredIps.size === 0) {
+      for (let idx = 1; idx < candidateSubnets.length; idx++) {
+        await sweepSubnet(candidateSubnets[idx]);
+        if (discoveredIps.size > 0) break;
+      }
+    }
+
+    setUnits((prev) =>
+      prev.map((u) =>
+        claimedSlots.has(u.unitId) ? u : { ...u, online: false, playing: false }
+      )
+    );
+    setIsScanning(false);
+    addLog(
+      'SYS',
+      `Scan complete: ${discoveredIps.size} ESP32 unit(s) connected`
+    );
+  };
+
+  // Ping configured units on mount
   useEffect(() => {
     let mounted = true;
     (async () => {
@@ -408,510 +503,141 @@ export default function App() {
     };
   }, [pingSingleUnit, addLog]);
 
-  // Real-time 16-channel relay visualizer synced to song playback time
-  useEffect(() => {
-    if (!isMasterPlaying) {
+  // Select pattern and broadcast to all connected ESP32s
+  const handleSelectPattern = async (patternId: string) => {
+    setSelectedPattern(patternId);
+    selectedPatternRef.current = patternId;
+    const targets = unitsRef.current.filter((u) => u.online);
+    const list = targets.length > 0 ? targets : unitsRef.current;
+
+    if (isPlaying) {
+      await broadcastPlayAll(patternId, stepMsRef.current);
       return;
     }
 
-    showStartRef.current = Date.now() - audioOffsetMsRef.current;
-    const interval = setInterval(() => {
-      const elapsed = Date.now() - showStartRef.current;
-      setUnits((prev) =>
-        prev.map((u) => {
-          if (!u.online) {
-            return { ...u, playing: false, relayMask: 0 };
-          }
-          return {
-            ...u,
-            playing: true,
-            relayMask: computeUnitRelayMask16(
-              u.unitId,
-              elapsed,
-              selectedTrackId
-            ),
-          };
-        })
-      );
-    }, 65);
-
-    return () => clearInterval(interval);
-  }, [isMasterPlaying, selectedTrackId]);
-
-  // Broadcast play with current audio offsetMs to all ESP32s
-  const broadcastPlayToEsp32s = useCallback(
-    async (trackId: number, offsetMs: number) => {
-      const results = await Promise.all(
-        units.map(async (u) => {
-          try {
-            const res = await fetchWithTimeout(
-              `http://${u.ip}/play?track=${trackId}&unit=${u.unitId}&offsetMs=${offsetMs}`,
-              1200
-            );
-            if (res.ok) {
-              setUnits((prev) =>
-                prev.map((item) =>
-                  item.unitId === u.unitId
-                    ? { ...item, online: true, playing: true }
-                    : item
-                )
-              );
-              return true;
-            }
-            return false;
-          } catch {
-            return false;
-          }
-        })
-      );
-      const syncedCount = results.filter(Boolean).length;
-      addLog(
-        'SYS',
-        `Music + Light Show synced on ${syncedCount}/10 ESP32 unit(s) (STEP_MS=180ms)`
-      );
-    },
-    [units, addLog]
-  );
-
-  // Broadcast stop to all ESP32s
-  const broadcastStopToEsp32s = useCallback(async () => {
-    setUnits((prev) =>
-      prev.map((u) => ({ ...u, playing: false, relayMask: 0 }))
-    );
     await Promise.all(
-      units.map(async (u) => {
-        try {
-          const res = await fetchWithTimeout(`http://${u.ip}/stop`, 1200);
-          if (res.ok) {
-            setUnits((prev) =>
-              prev.map((item) =>
-                item.unitId === u.unitId
-                  ? { ...item, online: true, playing: false, relayMask: 0 }
-                  : item
-              )
-            );
-          }
-        } catch {
-          // ignore offline unit timeout
-        }
-      })
-    );
-  }, [units]);
-
-  // Handle events from the embedded HTML5 Christmas Song Audio Player
-  const handleAudioWebViewMessage = useCallback(
-    (event: any) => {
-      try {
-        const raw = event?.nativeEvent?.data;
-        if (!raw) return;
-        const msg = JSON.parse(raw);
-
-        if (typeof msg.currentTimeMs === 'number') {
-          audioOffsetMsRef.current = msg.currentTimeMs;
-          showStartRef.current = Date.now() - msg.currentTimeMs;
-        }
-
-        if (msg.type === 'UI_TOGGLE_PLAY') {
-          if (msg.playing) {
-            setIsMasterPlaying(true);
-            addLog(
-              'TX',
-              `Music Player >> Started song & syncing ESP32 lights...`
-            );
-            broadcastPlayToEsp32s(selectedTrackId, msg.currentTimeMs || 0);
-          } else {
-            setIsMasterPlaying(false);
-            addLog('TX', 'Music Player >> Paused song & stopping ESP32 lights');
-            broadcastStopToEsp32s();
-          }
-        } else if (msg.type === 'AUDIO_SEEK' && isMasterPlaying) {
-          addLog(
-            'TX',
-            `Music Seek >> Resyncing ESP32 lights to ${Math.floor(
-              (msg.currentTimeMs || 0) / 1000
-            )}s`
-          );
-          broadcastPlayToEsp32s(selectedTrackId, msg.currentTimeMs || 0);
-        }
-      } catch {
-        // Ignore non-JSON messages
-      }
-    },
-    [selectedTrackId, isMasterPlaying, addLog, broadcastPlayToEsp32s, broadcastStopToEsp32s]
-  );
-
-  // Quick Ping & Blink of all 10 ESP32 unit IPs
-  const handlePingConfiguredUnits = async () => {
-    setIsScanning(true);
-    setIsMasterPlaying(false);
-    webViewRef.current?.injectJavaScript?.(
-      'window.stopShowMusic && window.stopShowMusic();'
-    );
-    addLog('TX', 'Pinging & blinking all ESP32 units (/blink)...');
-
-    const results = await Promise.all(
-      units.map(async (u) => {
-        try {
-          const res = await fetchWithTimeout(`http://${u.ip}/blink`, 1400);
-          if (res.ok) {
-            setUnits((prev) =>
-              prev.map((item) =>
-                item.unitId === u.unitId
-                  ? { ...item, online: true, playing: false }
-                  : item
-              )
-            );
-            return true;
-          }
-          return await pingSingleUnit(u);
-        } catch {
-          return await pingSingleUnit(u);
-        }
-      })
-    );
-    const foundCount = results.filter(Boolean).length;
-    setIsScanning(false);
-    addLog(
-      'SYS',
-      `Ping & Blink complete: ${foundCount}/10 ESP32 units blinked online`
-    );
-  };
-
-  // Full Subnet Scan: sweeps ENTIRE .2 - .254 subnet gently (batchSize 14)
-  const handleScanNetwork = async () => {
-    setIsScanning(true);
-    setIsMasterPlaying(false);
-    webViewRef.current?.injectJavaScript?.(
-      'window.stopShowMusic && window.stopShowMusic();'
-    );
-    const cleanPrefix = subnetPrefix.trim().replace(/\.$/, '');
-    addLog(
-      'SYS',
-      `Scanning hotspot ${cleanPrefix}.2 - 254 for all ESP32 units...`
-    );
-
-    const claimedSlots = new Map<number, string>();
-    const discoveredIps = new Set<string>();
-
-    const assignDiscoveredDevice = (
-      ip: string,
-      reportedUnitId: number,
-      playing: boolean,
-      relayMask: number
-    ) => {
-      if (discoveredIps.has(ip)) return;
-      discoveredIps.add(ip);
-
-      let targetSlot =
-        reportedUnitId >= 1 && reportedUnitId <= 10 ? reportedUnitId : 1;
-
-      if (claimedSlots.has(targetSlot) && claimedSlots.get(targetSlot) !== ip) {
-        for (let slot = 1; slot <= 10; slot++) {
-          if (!claimedSlots.has(slot)) {
-            targetSlot = slot;
-            break;
-          }
-        }
-      }
-
-      claimedSlots.set(targetSlot, ip);
-
-      setUnits((prev) =>
-        prev.map((u) =>
-          u.unitId === targetSlot
-            ? {
-                ...u,
-                ip,
-                online: true,
-                playing,
-                relayMask,
-              }
-            : u
-        )
-      );
-
-      const slotName = `UNIT-${targetSlot < 10 ? '0' : ''}${targetSlot}`;
-      if (targetSlot !== reportedUnitId) {
-        addLog(
-          'RX',
-          `✓ Found ${ip} (shared ID=${reportedUnitId}) -> Auto-assigned to ${slotName}`
-        );
-        fetchWithTimeout(`http://${ip}/status?unit=${targetSlot}`, 800).catch(
-          () => {}
-        );
-      } else {
-        addLog('RX', `✓ Found ${slotName} online at ${ip}`);
-      }
-
-      fetchWithTimeout(`http://${ip}/blink`, 900).catch(() => {});
-    };
-
-    const knownIps = Array.from(
-      new Set(units.map((u) => u.ip).filter(Boolean))
-    );
-    await Promise.all(
-      knownIps.map(async (ip) => {
-        try {
-          const res = await fetchWithTimeout(`http://${ip}/status`, 1300);
-          if (res.ok) {
-            const data = await res.json();
-            const detectedId = Number(data.unitId) || 1;
-            assignDiscoveredDevice(
-              ip,
-              detectedId,
-              Boolean(data.playing),
-              typeof data.relayMask === 'number' ? data.relayMask : 0
-            );
-          }
-        } catch {
-          // Will be checked in subnet sweep
-        }
-      })
-    );
-
-    const remainingIps: string[] = [];
-    for (let host = 2; host <= 254; host++) {
-      const ip = `${cleanPrefix}.${host}`;
-      if (!discoveredIps.has(ip)) {
-        remainingIps.push(ip);
-      }
-    }
-
-    const batchSize = 14;
-    for (let i = 0; i < remainingIps.length; i += batchSize) {
-      const batch = remainingIps.slice(i, i + batchSize);
-      await Promise.all(
-        batch.map(async (ip) => {
-          try {
-            const res = await fetchWithTimeout(`http://${ip}/status`, 850);
-            if (res.ok) {
-              const data = await res.json();
-              const detectedId = Number(data.unitId) || 1;
-              assignDiscoveredDevice(
-                ip,
-                detectedId,
-                Boolean(data.playing),
-                typeof data.relayMask === 'number' ? data.relayMask : 0
-              );
-            }
-          } catch {
-            // Host did not respond
-          }
-        })
-      );
-    }
-
-    setUnits((prev) =>
-      prev.map((u) =>
-        claimedSlots.has(u.unitId) ? u : { ...u, online: false, playing: false }
+      list.map((u) =>
+        fetchWithTimeout(
+          `http://${u.ip}/pattern?name=${encodeURIComponent(patternId)}`,
+          900
+        ).catch(() => {})
       )
     );
-
-    setIsScanning(false);
-    addLog(
-      'SYS',
-      `Scan finished: Found ${discoveredIps.size} active ESP32 unit(s) on ${cleanPrefix}.x`
-    );
+    addLog('TX', `Broadcast pattern "${patternId}" to all ESP32s`);
   };
 
-  // Master START / STOP: simultaneously plays/stops "2026 Christmas Lighting Songs.mp3" AND all 10 ESP32s!
-  const handleMasterToggleShow = async () => {
-    const nextPlaying = !isMasterPlaying;
+  // Toggle between ⚡ AUTO (Music Beat Sync) and 🎛️ MANUAL (Slider / Preset)
+  const handleSetSpeedMode = useCallback(
+    async (mode: 'auto' | 'manual') => {
+      setSpeedMode(mode);
+      speedModeRef.current = mode;
+      const isAuto = mode === 'auto';
+      const targets = unitsRef.current.filter((u) => u.online);
+      const list = targets.length > 0 ? targets : unitsRef.current;
 
-    if (!nextPlaying) {
-      setIsMasterPlaying(false);
-      webViewRef.current?.injectJavaScript?.(
-        'window.stopShowMusic && window.stopShowMusic();'
+      await Promise.all(
+        list.map((u) =>
+          fetchWithTimeout(
+            `http://${u.ip}/speed?auto=${isAuto ? 1 : 0}&ms=${stepMsRef.current}`,
+            800
+          ).catch(() => {})
+        )
       );
       addLog(
         'TX',
-        'Phone Master >> Stopping Christmas Music & all 10 ESP32 light shows...'
+        isAuto
+          ? 'Switched to ⚡ AUTO (Music Beat Sync) mode'
+          : `Switched to 🎛️ MANUAL (${stepMsRef.current}ms fixed) mode`
       );
-      await broadcastStopToEsp32s();
-      addLog('SYS', 'Music paused & all 160 relay channels turned OFF');
+    },
+    [addLog]
+  );
+
+  // Select step speed (ms) and broadcast to all connected ESP32s
+  const handleSelectSpeed = useCallback(
+    async (ms: number, logChange = true, switchToManual = false) => {
+      const clamped = Math.max(MIN_SPEED_MS, Math.min(MAX_SPEED_MS, Math.round(ms)));
+      setStepMs(clamped);
+      stepMsRef.current = clamped;
+
+      if (switchToManual && speedModeRef.current !== 'manual') {
+        setSpeedMode('manual');
+        speedModeRef.current = 'manual';
+      }
+
+      const isAuto = speedModeRef.current === 'auto';
+      const targets = unitsRef.current.filter((u) => u.online);
+      const list = targets.length > 0 ? targets : unitsRef.current;
+
+      await Promise.all(
+        list.map((u) =>
+          fetchWithTimeout(
+            `http://${u.ip}/speed?ms=${clamped}&auto=${isAuto ? 1 : 0}`,
+            800
+          ).catch(() => {})
+        )
+      );
+      if (logChange) {
+        addLog(
+          'TX',
+          isAuto
+            ? `Updated Base Speed ${clamped}ms (Auto Mode)`
+            : `Set Manual Speed ${clamped}ms (Fixed)`
+        );
+      }
+    },
+    [addLog]
+  );
+
+  const computeMsFromTouchX = (locationX: number): number => {
+    const width = Math.max(1, sliderWidthRef.current);
+    const ratio = Math.max(0, Math.min(1, locationX / width));
+    return Math.round(
+      MIN_SPEED_MS + ratio * (MAX_SPEED_MS - MIN_SPEED_MS)
+    );
+  };
+
+  const handleSpeedDragMove = (locationX: number) => {
+    const nextMs = computeMsFromTouchX(locationX);
+    setStepMs(nextMs);
+    stepMsRef.current = nextMs;
+    if (speedModeRef.current !== 'manual') {
+      setSpeedMode('manual');
+      speedModeRef.current = 'manual';
+    }
+    const now = Date.now();
+    if (now - lastSpeedBroadcastRef.current >= 120) {
+      lastSpeedBroadcastRef.current = now;
+      handleSelectSpeed(nextMs, false, true);
+    }
+  };
+
+  const handleSpeedDragEnd = (locationX: number) => {
+    setIsDraggingSpeed(false);
+    const finalMs = computeMsFromTouchX(locationX);
+    handleSelectSpeed(finalMs, true, true);
+  };
+
+  // Master START / STOP: starts/stops music AND all ESP32s simultaneously in sync
+  const handleToggleMasterShow = async () => {
+    const nextState = !isPlaying;
+    if (!nextState) {
+      setIsPlaying(false);
+      setMusicMetrics({ b: 0, bt: 0, r: 0 });
+      setLiveStepMs(stepMsRef.current);
+      webViewRef.current?.injectJavaScript?.(
+        'window.stopShowMusic && window.stopShowMusic();'
+      );
+      await broadcastStopAll();
       return;
     }
 
-    const track =
-      CHOREOGRAPHY_TRACKS.find((t) => t.id === selectedTrackId) ||
-      CHOREOGRAPHY_TRACKS[0];
-    setIsMasterPlaying(true);
-
-    // Start the bundled MP3 in the WebView immediately
+    setIsPlaying(true);
+    setLiveStepMs(stepMsRef.current);
     webViewRef.current?.injectJavaScript?.(
       'window.startShowMusic && window.startShowMusic(false);'
     );
-
-    addLog(
-      'TX',
-      `Playing "2026 Christmas Lighting Songs" + Track ${track.id} (180ms step)...`
-    );
-
-    await broadcastPlayToEsp32s(track.id, audioOffsetMsRef.current);
-  };
-
-  // Blink / Test an individual ESP32 unit's dual 8-channel relay boards
-  const handleBlinkUnit = async (unit: Esp32Unit) => {
-    addLog(
-      'TX',
-      `Testing 16 relays (Strips 1–8 & Xmas 9–16) on ${unit.name} (${unit.ip})...`
-    );
-    try {
-      const res = await fetchWithTimeout(`http://${unit.ip}/blink`, 1200);
-      if (res.ok) {
-        addLog('RX', `✓ ${unit.name} 16-ch relay test confirmed`);
-        setUnits((prev) =>
-          prev.map((u) =>
-            u.unitId === unit.unitId ? { ...u, online: true } : u
-          )
-        );
-      } else {
-        addLog('SYS', `✗ ${unit.name} (${unit.ip}) did not respond`);
-      }
-    } catch {
-      addLog('SYS', `✗ ${unit.name} (${unit.ip}) did not respond`);
-    }
-  };
-
-  // Hardware Self-ID for a single ESP32 unit
-  const handleIdentifyUnit = async (unit: Esp32Unit) => {
-    const idMask = 1 << (unit.unitId - 1);
-    setUnits((prev) =>
-      prev.map((u) =>
-        u.unitId === unit.unitId ? { ...u, relayMask: idMask } : u
-      )
-    );
-    setTimeout(() => {
-      setUnits((prev) =>
-        prev.map((u) =>
-          u.unitId === unit.unitId && u.relayMask === idMask
-            ? { ...u, relayMask: 0 }
-            : u
-        )
-      );
-    }, 3000);
-
-    addLog(
-      'TX',
-      `Self-ID ${unit.name} >> Lighting Relay CH${unit.unitId} for 3s...`
-    );
-    try {
-      const res = await fetchWithTimeout(
-        `http://${unit.ip}/identify?unit=${unit.unitId}`,
-        1200
-      );
-      if (res.ok) {
-        addLog(
-          'RX',
-          `✓ ${unit.name} Self-ID active (Relay CH${unit.unitId} ON for 3s)`
-        );
-        setUnits((prev) =>
-          prev.map((u) =>
-            u.unitId === unit.unitId ? { ...u, online: true } : u
-          )
-        );
-      } else {
-        addLog('SYS', `✗ ${unit.name} (${unit.ip}) did not respond`);
-      }
-    } catch {
-      addLog('SYS', `✗ ${unit.name} (${unit.ip}) did not respond`);
-    }
-  };
-
-  // Hardware Self-ID for ALL 10 ESP32 units at once
-  const handleIdentifyAllUnits = async () => {
-    setIsMasterPlaying(false);
-    webViewRef.current?.injectJavaScript?.(
-      'window.stopShowMusic && window.stopShowMusic();'
-    );
-    addLog(
-      'TX',
-      'Self-ID All 10 >> Unit 1=CH1, Unit 2=CH2 ... Unit 10=CH10 for 3s!'
-    );
-
-    setUnits((prev) =>
-      prev.map((u) => ({
-        ...u,
-        playing: false,
-        relayMask: u.online ? 1 << (u.unitId - 1) : 0,
-      }))
-    );
-
-    const results = await Promise.all(
-      units.map(async (u) => {
-        try {
-          const res = await fetchWithTimeout(
-            `http://${u.ip}/identify?unit=${u.unitId}`,
-            1200
-          );
-          if (res.ok) {
-            setUnits((prev) =>
-              prev.map((item) =>
-                item.unitId === u.unitId
-                  ? {
-                      ...item,
-                      online: true,
-                      relayMask: 1 << (u.unitId - 1),
-                    }
-                  : item
-              )
-            );
-            return true;
-          }
-          return false;
-        } catch {
-          return false;
-        }
-      })
-    );
-
-    setTimeout(() => {
-      setUnits((prev) => prev.map((u) => ({ ...u, relayMask: 0 })));
-    }, 3000);
-
-    const count = results.filter(Boolean).length;
-    addLog(
-      'SYS',
-      `Hardware Self-ID triggered on ${count}/10 ESP32 units (check CH1–CH10)`
-    );
-  };
-
-  // Toggle a single relay channel (CH1..CH16) on a specific ESP32 unit
-  const handleToggleSingleRelay = async (
-    unit: Esp32Unit,
-    channelIndex: number
-  ) => {
-    const bit = 1 << channelIndex;
-    const nextState = (unit.relayMask & bit) === 0 ? 1 : 0;
-    const nextMask = nextState ? unit.relayMask | bit : unit.relayMask & ~bit;
-
-    setUnits((prev) =>
-      prev.map((u) =>
-        u.unitId === unit.unitId ? { ...u, relayMask: nextMask } : u
-      )
-    );
-
-    const chNum = channelIndex + 1;
-    addLog(
-      'TX',
-      `${unit.name} >> Relay CH${chNum} -> ${nextState ? 'ON' : 'OFF'}`
-    );
-
-    try {
-      const res = await fetchWithTimeout(
-        `http://${unit.ip}/relay?ch=${chNum}&state=${nextState}`,
-        1000
-      );
-      if (res.ok) {
-        setUnits((prev) =>
-          prev.map((u) =>
-            u.unitId === unit.unitId ? { ...u, online: true } : u
-          )
-        );
-      }
-    } catch {
-      addLog('SYS', `✗ ${unit.name} (${unit.ip}) unreachable for CH${chNum}`);
-    }
+    await broadcastPlayAll();
   };
 
   // Save edited IP for a unit
@@ -934,6 +660,84 @@ export default function App() {
     setEditingIpText('');
   };
 
+  // Handle ~10 Hz reactive music packets from player.html and broadcast to all online ESP32s
+  const handleAudioWebViewMessage = useCallback(
+    (event: any) => {
+      try {
+        const raw = event?.nativeEvent?.data;
+        if (!raw) return;
+        const msg = JSON.parse(raw);
+
+        if (msg.type === 'LOCAL_SUBNET' && typeof msg.subnet === 'string') {
+          const sub = msg.subnet.trim();
+          if (sub && !detectedSubnetsRef.current.has(sub)) {
+            detectedSubnetsRef.current.add(sub);
+            setSubnetPrefix(sub);
+          }
+          return;
+        }
+
+        if (msg.type === 'UI_TOGGLE_PLAY') {
+          if (msg.playing) {
+            setIsPlaying(true);
+            setLiveStepMs(stepMsRef.current);
+            broadcastPlayAll();
+          } else {
+            setIsPlaying(false);
+            setMusicMetrics({ b: 0, bt: 0, r: 0 });
+            setLiveStepMs(stepMsRef.current);
+            broadcastStopAll();
+          }
+          return;
+        }
+
+        if (msg.type === 'MUSIC_STREAM' && msg.playing) {
+          const b = Number(msg.b) || 0;
+          const bt = Number(msg.bt) || 0;
+          const r = Number(msg.r) || 0;
+          setMusicMetrics({ b, bt, r });
+
+          const isAuto = speedModeRef.current === 'auto';
+
+          // When in Auto Mode: dynamically calculate accurate musical tempo ms (on beat, no flicker)
+          const energy = Math.min(100, Math.max(0, b * 0.45 + bt * 0.35 + r * 0.20));
+          let factor = 1.0;
+          if (energy >= 50) {
+            factor = 1.0 - ((energy - 50) / 50) * 0.25; // Speed up on energetic drops (up to 25% faster -> ~165ms)
+          } else {
+            factor = 1.0 + ((50 - energy) / 50) * 0.35; // Slow down on calm breakdowns (up to 35% slower -> ~295ms)
+          }
+          const dynamicMs = Math.max(140, Math.min(600, Math.round(stepMsRef.current * factor)));
+          if (isAuto) {
+            setLiveStepMs(dynamicMs);
+          } else {
+            setLiveStepMs(stepMsRef.current);
+          }
+
+          if (!musicStreamBusyRef.current) {
+            const activeTargets = unitsRef.current.filter((u) => u.online);
+            if (activeTargets.length > 0) {
+              musicStreamBusyRef.current = true;
+              Promise.all(
+                activeTargets.map((u) =>
+                  fetchWithTimeout(
+                    `http://${u.ip}/music?b=${b}&bt=${bt}&r=${r}&ms=${isAuto ? dynamicMs : stepMsRef.current}&auto=${isAuto ? 1 : 0}`,
+                    400
+                  ).catch(() => {})
+                )
+              ).finally(() => {
+                musicStreamBusyRef.current = false;
+              });
+            }
+          }
+        }
+      } catch {
+        // ignore malformed message
+      }
+    },
+    [broadcastPlayAll, broadcastStopAll]
+  );
+
   return (
     <View style={styles.safeArea}>
       <StatusBar style="light" />
@@ -942,30 +746,49 @@ export default function App() {
         style={styles.scrollView}
         contentContainerStyle={styles.scrollContent}
         showsVerticalScrollIndicator={false}
+        scrollEnabled={!isDraggingSpeed}
       >
         {/* HEADER */}
         <View style={styles.header}>
           <View style={styles.headerTitleRow}>
-            <Text style={styles.brandTag}>{"DUNKIN' LIGHTS"}</Text>
-            <View style={styles.hardwareBadge}>
-              <Text style={styles.hardwareBadgeText}>
-                MUSIC + 10x ESP32 (16-CH)
+            <Text style={styles.brandTag}>MUSIC LIGHT SYNC</Text>
+            <View
+              style={[
+                styles.statusBadge,
+                onlineCount > 0
+                  ? styles.statusBadgeOnline
+                  : styles.statusBadgeOffline,
+              ]}
+            >
+              <View
+                style={[
+                  styles.statusDot,
+                  onlineCount > 0 ? styles.dotOnline : styles.dotOffline,
+                ]}
+              />
+              <Text
+                style={[
+                  styles.statusBadgeText,
+                  onlineCount > 0 ? styles.textOnline : styles.textOffline,
+                ]}
+              >
+                {`${onlineCount}/10 ESP32 ONLINE`}
               </Text>
             </View>
           </View>
           <Text style={styles.headerSubtitle}>
-            2026 Christmas Lighting Songs • MusicLightSync_ESP32 (180ms Step)
+            Multi-ESP32 Sync • 16-Channel Relay Pattern Engine
           </Text>
         </View>
 
-        {/* BUILT-IN CHRISTMAS LIGHTING SONG PLAYER CARD */}
+        {/* 1. MUSIC PLAYER CARD */}
         <View style={styles.card}>
           <View style={styles.cardHeaderRow}>
             <Text style={styles.cardTitle}>
-              🎵 Built-in Song: 2026 Christmas Lighting
+              🎵 Music Player (2026 Christmas Lighting)
             </Text>
             <View style={styles.pillBadge}>
-              <Text style={styles.pillBadgeText}>35:38 MP3 BUNDLED</Text>
+              <Text style={styles.pillBadgeText}>10 Hz AUDIO SYNC</Text>
             </View>
           </View>
 
@@ -984,71 +807,115 @@ export default function App() {
               />
             </View>
           ) : (
-            <View style={styles.hotspotGuideBox}>
-              <Text style={styles.hotspotGuideText}>
-                Audio engine ready (MP3 file - 2026 Christmas Lighting Songs.mp3)
+            <View style={styles.infoBox}>
+              <Text style={styles.infoBoxText}>
+                Loaded: 2026 Christmas Lighting Songs.mp3
               </Text>
             </View>
           )}
+
+          {/* LIVE REACTIVE METERS (BASS / BEAT / RMS STREAMED TO ALL ESP32s) */}
+          <View style={styles.metersRow}>
+            <View style={styles.meterCol}>
+              <View style={styles.meterLabelRow}>
+                <Text style={styles.meterLabel}>BASS</Text>
+                <Text style={styles.meterValue}>{musicMetrics.b}%</Text>
+              </View>
+              <View style={styles.meterTrack}>
+                <View
+                  style={[
+                    styles.meterFill,
+                    {
+                      width: `${Math.min(100, musicMetrics.b)}%`,
+                      backgroundColor: '#FF5263',
+                    },
+                  ]}
+                />
+              </View>
+            </View>
+
+            <View style={styles.meterCol}>
+              <View style={styles.meterLabelRow}>
+                <Text style={styles.meterLabel}>BEAT</Text>
+                <Text style={styles.meterValue}>{musicMetrics.bt}%</Text>
+              </View>
+              <View style={styles.meterTrack}>
+                <View
+                  style={[
+                    styles.meterFill,
+                    {
+                      width: `${Math.min(100, musicMetrics.bt)}%`,
+                      backgroundColor: '#FDB913',
+                    },
+                  ]}
+                />
+              </View>
+            </View>
+
+            <View style={styles.meterCol}>
+              <View style={styles.meterLabelRow}>
+                <Text style={styles.meterLabel}>LEVEL</Text>
+                <Text style={styles.meterValue}>{musicMetrics.r}%</Text>
+              </View>
+              <View style={styles.meterTrack}>
+                <View
+                  style={[
+                    styles.meterFill,
+                    {
+                      width: `${Math.min(100, musicMetrics.r)}%`,
+                      backgroundColor: '#38BDF8',
+                    },
+                  ]}
+                />
+              </View>
+            </View>
+          </View>
         </View>
 
-        {/* MASTER START / STOP BUTTON (STARTS MUSIC + ALL 10 ESP32s TOGETHER) */}
+        {/* 2. START / STOP LIGHT SHOW SYNC IN MUSIC (ALL ESP32s) */}
         <View style={styles.masterActionContainer}>
           <TouchableOpacity
             activeOpacity={0.85}
-            onPress={handleMasterToggleShow}
+            onPress={handleToggleMasterShow}
             style={[
               styles.masterButton,
-              !isMasterPlaying ? styles.masterButtonReady : styles.masterButtonStop,
+              !isPlaying ? styles.masterButtonReady : styles.masterButtonStop,
             ]}
           >
             <Text
               style={[
                 styles.masterButtonTitle,
-                isMasterPlaying && styles.masterButtonTitleStop,
+                isPlaying && styles.masterButtonTitleStop,
               ]}
             >
-              {isMasterPlaying
-                ? '⏹ STOP MUSIC & ALL 10 ESP32 LIGHTS'
-                : '▶ START CHRISTMAS MUSIC + ALL 10 ESP32s'}
+              {isPlaying
+                ? '⏹ STOP MUSIC & ALL ESP32 LIGHTS'
+                : '▶ START LIGHT SHOW SYNC IN MUSIC'}
             </Text>
             <Text
               style={[
                 styles.masterButtonSub,
-                isMasterPlaying && styles.masterButtonSubStop,
+                isPlaying && styles.masterButtonSubStop,
               ]}
             >
-              {isMasterPlaying
-                ? 'Tap to pause song & turn OFF all 160 relay channels immediately'
-                : 'Plays 2026 Christmas Lighting Songs.mp3 & syncs all 10 ESP32s (180ms beat)'}
+              {isPlaying
+                ? `Playing • ${speedMode === 'auto' ? `Auto Sync: ${liveStepMs} ms (Beat Phase-Locked)` : `Manual Fixed: ${stepMs} ms`}`
+                : `Plays music & syncs all connected ESP32s ("${selectedPattern}", ${speedMode === 'auto' ? 'Auto Beat Sync' : `${stepMs}ms`})`}
             </Text>
           </TouchableOpacity>
         </View>
 
-        {/* HOTSPOT & NETWORK SCANNER CARD */}
+        {/* 3. MULTI-ESP32 HOTSPOT SCANNER & CONNECTION LIST (NO RELAY TESTING) */}
         <View style={styles.card}>
           <View style={styles.cardHeaderRow}>
-            <Text style={styles.cardTitle}>📡 Master Hotspot Controller</Text>
-            <View style={styles.pillBadge}>
-              <Text style={styles.pillBadgeText}>LIVE HARDWARE</Text>
-            </View>
-          </View>
-
-          <View style={styles.hotspotGuideBox}>
-            <Text style={styles.hotspotGuideText}>
-              1. Turn on Mobile Hotspot{' '}
-              <Text style={styles.highlightText}>DunkinNetwork</Text> (Password:{' '}
-              <Text style={styles.highlightText}>dunkin123456</Text>).
+            <Text style={styles.cardTitle}>
+              📡 Connect Multiple ESP32s (DunkinNetwork)
             </Text>
-            <Text style={styles.hotspotGuideText}>
-              2. CH1–CH8 = <Text style={styles.highlightText}>LED Strip Sets</Text>{' '}
-              • CH9–CH16 ={' '}
-              <Text style={styles.highlightText}>Christmas Light Sets</Text>.
-            </Text>
+            <Text style={styles.portHintText}>{onlineCount}/10 Connected</Text>
           </View>
 
           <View style={styles.scanRow}>
-            <View style={styles.subnetInputBox}>
+            <View style={styles.subnetFieldBox}>
               <Text style={styles.subnetLabel}>Subnet:</Text>
               <TextInput
                 style={styles.subnetInput}
@@ -1061,117 +928,326 @@ export default function App() {
             </View>
 
             <TouchableOpacity
-              style={[styles.pingButton, isScanning && styles.scanButtonDisabled]}
+              style={[styles.pingButton, isScanning && styles.buttonDisabled]}
               disabled={isScanning}
               activeOpacity={0.8}
-              onPress={handlePingConfiguredUnits}
+              onPress={handlePingAllUnits}
             >
-              <Text style={styles.scanButtonText}>🔄 Ping 10</Text>
+              <Text style={styles.buttonText}>📡 Ping 10</Text>
             </TouchableOpacity>
 
             <TouchableOpacity
-              style={[styles.scanButton, isScanning && styles.scanButtonDisabled]}
+              style={[styles.scanButton, isScanning && styles.buttonDisabled]}
               disabled={isScanning}
               activeOpacity={0.8}
-              onPress={handleScanNetwork}
+              onPress={handleScanHotspot}
             >
               {isScanning ? (
                 <View style={styles.scanLoadingRow}>
                   <ActivityIndicator size="small" color="#FFFFFF" />
-                  <Text style={styles.scanButtonText}>Scanning</Text>
+                  <Text style={styles.buttonText}>Scanning</Text>
                 </View>
               ) : (
-                <Text style={styles.scanButtonText}>🔍 Scan Hotspot</Text>
+                <Text style={styles.buttonText}>🔍 Scan Hotspot</Text>
               )}
             </TouchableOpacity>
           </View>
 
-          <TouchableOpacity
-            style={styles.identifyAllButton}
-            activeOpacity={0.8}
-            onPress={handleIdentifyAllUnits}
-          >
-            <Text style={styles.identifyAllButtonText}>
-              🆔 Hardware Self-ID All 10 Units (Unit 1→CH1 … Unit 10→CH10)
-            </Text>
-          </TouchableOpacity>
-        </View>
+          {/* COMPACT MULTI-ESP32 CONNECTION STATUS LIST */}
+          <View style={styles.unitsGrid}>
+            {units.map((unit) => (
+              <View
+                key={unit.unitId}
+                style={[
+                  styles.unitRowCard,
+                  unit.online ? styles.unitRowOnline : styles.unitRowOffline,
+                ]}
+              >
+                <View style={styles.unitRowHeader}>
+                  <View style={styles.unitLeftInfo}>
+                    <View
+                      style={[
+                        styles.statusDot,
+                        unit.online ? styles.dotOnline : styles.dotOffline,
+                      ]}
+                    />
+                    <Text style={styles.unitNameText}>{unit.name}</Text>
+                    <TouchableOpacity
+                      onPress={() => {
+                        setEditingUnitId(unit.unitId);
+                        setEditingIpText(unit.ip);
+                      }}
+                      style={styles.ipPill}
+                    >
+                      <Text style={styles.ipPillText}>{unit.ip} ✎</Text>
+                    </TouchableOpacity>
+                  </View>
 
-        {/* CONNECTION STATUS BADGE */}
-        <View style={styles.statusSection}>
-          <View
-            style={[
-              styles.statusBadge,
-              onlineCount > 0
-                ? styles.statusBadgeConnected
-                : styles.statusBadgeDisconnected,
-            ]}
-          >
-            <View
-              style={[
-                styles.statusDot,
-                onlineCount > 0 ? styles.dotConnected : styles.dotDisconnected,
-              ]}
-            />
-            <Text
-              style={[
-                styles.statusText,
-                onlineCount > 0
-                  ? styles.textConnected
-                  : styles.textDisconnected,
-              ]}
-            >
-              {`${onlineCount}/10 ESP32 UNITS ONLINE (${onlineCount * 16}/160 RELAYS)`}
-            </Text>
+                  <Text
+                    style={[
+                      styles.unitStateText,
+                      unit.online ? styles.textOnline : styles.textOffline,
+                    ]}
+                  >
+                    {unit.online
+                      ? unit.playing
+                        ? 'SYNCING'
+                        : 'CONNECTED'
+                      : 'OFFLINE'}
+                  </Text>
+                </View>
+
+                {editingUnitId === unit.unitId && (
+                  <View style={styles.editIpRow}>
+                    <TextInput
+                      style={styles.editIpInput}
+                      value={editingIpText}
+                      onChangeText={setEditingIpText}
+                      placeholder="e.g. 10.241.48.101"
+                      placeholderTextColor="#64748B"
+                      autoCapitalize="none"
+                    />
+                    <TouchableOpacity
+                      style={styles.saveIpButton}
+                      onPress={() => handleSaveUnitIp(unit.unitId)}
+                    >
+                      <Text style={styles.saveIpButtonText}>Save IP</Text>
+                    </TouchableOpacity>
+                  </View>
+                )}
+              </View>
+            ))}
           </View>
         </View>
 
-        {/* CHOREOGRAPHY TRACK / EFFECT SELECTOR */}
+        {/* 4. ESP32 BUILT-IN RELAY PATTERN & SPEED ORCHESTRATION */}
         <View style={styles.card}>
           <Text style={styles.sectionLabel}>
-            SELECT MUSICLIGHTSYNC_ESP32.INO MODE:
+            ESP32 PATTERN ENGINE (MAX 8 RELAYS ON FOR POWER SAFETY):
           </Text>
-          {CHOREOGRAPHY_TRACKS.map((track) => {
-            const selected = track.id === selectedTrackId;
-            return (
+
+          <View style={styles.speedRow}>
+            {/* SPEED MODE SELECTOR: ⚡ AUTO vs 🎛️ MANUAL */}
+            <View style={styles.speedModeToggleRow}>
               <TouchableOpacity
-                key={track.id}
-                activeOpacity={0.8}
-                onPress={() => {
-                  setSelectedTrackId(track.id);
-                  if (isMasterPlaying) {
-                    broadcastPlayToEsp32s(track.id, audioOffsetMsRef.current);
-                  }
-                }}
                 style={[
-                  styles.trackCard,
-                  selected && styles.trackCardSelected,
+                  styles.speedModeBtn,
+                  speedMode === 'auto' && styles.speedModeBtnActiveAuto,
                 ]}
+                onPress={() => handleSetSpeedMode('auto')}
+                activeOpacity={0.8}
               >
-                <View style={styles.trackInfo}>
-                  <Text
-                    style={[
-                      styles.trackTitle,
-                      selected && styles.trackTitleSelected,
-                    ]}
-                  >
-                    {track.id}. {track.title}
-                  </Text>
-                  <Text style={styles.trackSubtitle}>{track.subtitle}</Text>
-                </View>
+                <Text
+                  style={[
+                    styles.speedModeBtnText,
+                    speedMode === 'auto' && styles.speedModeBtnTextActiveAuto,
+                  ]}
+                >
+                  ⚡ AUTO (Music Beat Sync)
+                </Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={[
+                  styles.speedModeBtn,
+                  speedMode === 'manual' && styles.speedModeBtnActiveManual,
+                ]}
+                onPress={() => handleSetSpeedMode('manual')}
+                activeOpacity={0.8}
+              >
+                <Text
+                  style={[
+                    styles.speedModeBtnText,
+                    speedMode === 'manual' && styles.speedModeBtnTextActiveManual,
+                  ]}
+                >
+                  🎛️ MANUAL (Slider / Preset)
+                </Text>
+              </TouchableOpacity>
+            </View>
+
+            <View style={styles.speedHeaderRow}>
+              <Text style={styles.speedLabel}>
+                {speedMode === 'auto'
+                  ? 'Base Tempo (Auto-Scales with Energy):'
+                  : 'Manual Fixed Speed (Exact Metronome):'}
+              </Text>
+              <View style={styles.speedFineRow}>
+                <TouchableOpacity
+                  style={styles.speedStepBtn}
+                  activeOpacity={0.75}
+                  onPress={() => handleSelectSpeed(stepMs - 5, true, true)}
+                >
+                  <Text style={styles.speedStepBtnText}>−5</Text>
+                </TouchableOpacity>
                 <View
                   style={[
-                    styles.trackBadge,
-                    selected && styles.trackBadgeSelected,
+                    styles.speedValueBadge,
+                    speedMode === 'auto'
+                      ? styles.speedValueBadgeAuto
+                      : styles.speedValueBadgeManual,
                   ]}
                 >
                   <Text
                     style={[
-                      styles.trackBadgeText,
-                      selected && styles.trackBadgeTextSelected,
+                      styles.speedValueBadgeText,
+                      speedMode === 'auto'
+                        ? styles.speedValueBadgeTextAuto
+                        : styles.speedValueBadgeTextManual,
                     ]}
                   >
-                    {track.badge}
+                    {speedMode === 'auto'
+                      ? isPlaying
+                        ? `⚡ Auto: ${liveStepMs} ms (On Beat)`
+                        : `⚡ Auto: ${stepMs} ms (Ready)`
+                      : `🎛️ Manual: ${stepMs} ms`}
+                  </Text>
+                </View>
+                <TouchableOpacity
+                  style={styles.speedStepBtn}
+                  activeOpacity={0.75}
+                  onPress={() => handleSelectSpeed(stepMs + 5, true, true)}
+                >
+                  <Text style={styles.speedStepBtnText}>+5</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+
+            {/* DRAGGABLE SPEED SLIDER TRACK (30ms .. 500ms) */}
+            <View
+              style={styles.sliderTouchArea}
+              onLayout={(e) => {
+                if (e.nativeEvent.layout.width > 0) {
+                  sliderWidthRef.current = e.nativeEvent.layout.width;
+                }
+              }}
+              onStartShouldSetResponder={() => true}
+              onMoveShouldSetResponder={() => true}
+              onResponderTerminationRequest={() => false}
+              onResponderGrant={(e) => {
+                setIsDraggingSpeed(true);
+                handleSpeedDragMove(e.nativeEvent.locationX);
+              }}
+              onResponderMove={(e) => {
+                handleSpeedDragMove(e.nativeEvent.locationX);
+              }}
+              onResponderRelease={(e) => {
+                handleSpeedDragEnd(e.nativeEvent.locationX);
+              }}
+              onResponderTerminate={() => {
+                setIsDraggingSpeed(false);
+              }}
+            >
+              <View pointerEvents="none" style={styles.sliderTrack}>
+                <View
+                  pointerEvents="none"
+                  style={[
+                    styles.sliderFill,
+                    {
+                      width: `${Math.max(
+                        0,
+                        Math.min(
+                          100,
+                          ((stepMs - MIN_SPEED_MS) /
+                            (MAX_SPEED_MS - MIN_SPEED_MS)) *
+                            100
+                        )
+                      )}%`,
+                    },
+                  ]}
+                />
+              </View>
+              <View
+                pointerEvents="none"
+                style={[
+                  styles.sliderThumb,
+                  {
+                    left: `${Math.max(
+                      0,
+                      Math.min(
+                        100,
+                        ((stepMs - MIN_SPEED_MS) /
+                          (MAX_SPEED_MS - MIN_SPEED_MS)) *
+                          100
+                      )
+                    )}%`,
+                  },
+                ]}
+              />
+            </View>
+
+            <View style={styles.sliderScaleRow}>
+              <Text style={styles.sliderScaleText}>100ms (Fast)</Text>
+              <Text style={styles.sliderScaleText}>220ms (Groove)</Text>
+              <Text style={styles.sliderScaleText}>600ms (Slow)</Text>
+            </View>
+
+            <View style={styles.speedPillsWrap}>
+              {SPEED_PRESETS_MS.map((ms) => {
+                const active = speedMode === 'manual' && stepMs === ms;
+                return (
+                  <TouchableOpacity
+                    key={ms}
+                    activeOpacity={0.8}
+                    onPress={() => handleSelectSpeed(ms, true, true)}
+                    style={[
+                      styles.speedPill,
+                      active && styles.speedPillActive,
+                    ]}
+                  >
+                    <Text
+                      style={[
+                        styles.speedPillText,
+                        active && styles.speedPillTextActive,
+                      ]}
+                    >
+                      {ms}ms
+                    </Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+          </View>
+
+          {ESP32_PATTERNS.map((pat) => {
+            const selected = pat.id === selectedPattern;
+            return (
+              <TouchableOpacity
+                key={pat.id}
+                activeOpacity={0.8}
+                onPress={() => handleSelectPattern(pat.id)}
+                style={[
+                  styles.patternCard,
+                  selected && styles.patternCardSelected,
+                ]}
+              >
+                <View style={styles.patternInfo}>
+                  <Text
+                    style={[
+                      styles.patternTitle,
+                      selected && styles.patternTitleSelected,
+                    ]}
+                  >
+                    {pat.label}
+                  </Text>
+                  <Text style={styles.patternDesc}>{pat.description}</Text>
+                </View>
+                <View
+                  style={[
+                    styles.patternBadge,
+                    pat.reactive
+                      ? styles.patternBadgeReactive
+                      : styles.patternBadgeStandard,
+                    selected && styles.patternBadgeSelected,
+                  ]}
+                >
+                  <Text
+                    style={[
+                      styles.patternBadgeText,
+                      selected && styles.patternBadgeTextSelected,
+                    ]}
+                  >
+                    {pat.reactive ? 'MUSIC REACTIVE' : pat.id}
                   </Text>
                 </View>
               </TouchableOpacity>
@@ -1179,181 +1255,11 @@ export default function App() {
           })}
         </View>
 
-        {/* 10 ESP32 UNITS × DUAL 8-CHANNEL RELAY MATRIX (16 CHANNELS PER UNIT) */}
+        {/* TELEMETRY LOG */}
         <View style={styles.card}>
-          <View style={styles.cardHeaderRow}>
-            <Text style={styles.cardTitle}>
-              💡 10x ESP32 Units (CH1–8 Strips • CH9–16 Xmas)
-            </Text>
-            <Text style={styles.relayHintText}>Tap CH1–16 to toggle</Text>
-          </View>
-
-          {units.map((unit) => (
-            <View
-              key={unit.unitId}
-              style={[
-                styles.unitCard,
-                unit.online ? styles.unitCardOnline : styles.unitCardOffline,
-              ]}
-            >
-              {/* Unit Top Row */}
-              <View style={styles.unitHeaderRow}>
-                <View style={styles.unitTitleRow}>
-                  <View
-                    style={[
-                      styles.miniDot,
-                      unit.online
-                        ? styles.dotConnected
-                        : styles.dotDisconnected,
-                    ]}
-                  />
-                  <Text style={styles.unitNameText}>{unit.name}</Text>
-                  <TouchableOpacity
-                    onPress={() => {
-                      setEditingUnitId(unit.unitId);
-                      setEditingIpText(unit.ip);
-                    }}
-                    style={styles.ipPill}
-                  >
-                    <Text style={styles.ipPillText}>{unit.ip} ✎</Text>
-                  </TouchableOpacity>
-                </View>
-
-                <View style={styles.unitActionGroup}>
-                  <TouchableOpacity
-                    style={styles.idUnitButton}
-                    activeOpacity={0.75}
-                    onPress={() => handleIdentifyUnit(unit)}
-                  >
-                    <Text style={styles.idUnitButtonText}>
-                      🆔 CH{unit.unitId}
-                    </Text>
-                  </TouchableOpacity>
-
-                  <TouchableOpacity
-                    style={styles.blinkButton}
-                    activeOpacity={0.75}
-                    onPress={() => handleBlinkUnit(unit)}
-                  >
-                    <Text style={styles.blinkButtonText}>⚡ Test 16-Ch</Text>
-                  </TouchableOpacity>
-                </View>
-              </View>
-
-              {/* Unique Light Play Description + Self-ID Info */}
-              <Text style={styles.unitRoleText}>
-                Effect:{' '}
-                <Text style={styles.unitRoleHighlight}>{unit.role}</Text>
-                {'  •  '}
-                <Text style={styles.selfIdHighlight}>
-                  Self-ID: CH{unit.unitId}
-                </Text>
-              </Text>
-
-              {/* Optional IP Editor */}
-              {editingUnitId === unit.unitId && (
-                <View style={styles.editIpRow}>
-                  <TextInput
-                    style={styles.editIpInput}
-                    value={editingIpText}
-                    onChangeText={setEditingIpText}
-                    placeholder="e.g. 10.241.48.101"
-                    placeholderTextColor="#64748B"
-                    autoCapitalize="none"
-                  />
-                  <TouchableOpacity
-                    style={styles.saveIpButton}
-                    onPress={() => handleSaveUnitIp(unit.unitId)}
-                  >
-                    <Text style={styles.saveIpButtonText}>Save IP</Text>
-                  </TouchableOpacity>
-                </View>
-              )}
-
-              {/* RELAY MODULE #1: CH1 .. CH8 (LED STRIP SETS) */}
-              <Text style={styles.boardBankLabel}>
-                Relay Board A — LED Strip Sets (CH1–CH8 • GPIOs 13,14,27,26,25,33,32,16)
-              </Text>
-              <View style={styles.relayRow}>
-                {[0, 1, 2, 3, 4, 5, 6, 7].map((chIdx) => {
-                  const isOn = ((unit.relayMask >> chIdx) & 1) === 1;
-                  return (
-                    <TouchableOpacity
-                      key={chIdx}
-                      activeOpacity={0.75}
-                      onPress={() => handleToggleSingleRelay(unit, chIdx)}
-                      style={[
-                        styles.relayChannelBox,
-                        isOn ? styles.relayChannelOn : styles.relayChannelOff,
-                      ]}
-                    >
-                      <View
-                        style={[
-                          styles.relayLed,
-                          isOn ? styles.relayLedOn : styles.relayLedOff,
-                        ]}
-                      />
-                      <Text
-                        style={[
-                          styles.relayChannelLabel,
-                          isOn && styles.relayChannelLabelOn,
-                        ]}
-                      >
-                        CH{chIdx + 1}
-                      </Text>
-                    </TouchableOpacity>
-                  );
-                })}
-              </View>
-
-              {/* RELAY MODULE #2: CH9 .. CH16 (CHRISTMAS SETS) */}
-              <Text style={[styles.boardBankLabel, styles.boardBankLabelSecond]}>
-                Relay Board B — Christmas Sets (CH9–CH16 • GPIOs 17,18,19,21,22,23,4,5)
-              </Text>
-              <View style={styles.relayRow}>
-                {[8, 9, 10, 11, 12, 13, 14, 15].map((chIdx) => {
-                  const isOn = ((unit.relayMask >> chIdx) & 1) === 1;
-                  return (
-                    <TouchableOpacity
-                      key={chIdx}
-                      activeOpacity={0.75}
-                      onPress={() => handleToggleSingleRelay(unit, chIdx)}
-                      style={[
-                        styles.relayChannelBox,
-                        isOn
-                          ? styles.relayChannelOnBankB
-                          : styles.relayChannelOff,
-                      ]}
-                    >
-                      <View
-                        style={[
-                          styles.relayLed,
-                          isOn ? styles.relayLedOnBankB : styles.relayLedOff,
-                        ]}
-                      />
-                      <Text
-                        style={[
-                          styles.relayChannelLabel,
-                          isOn && styles.relayChannelLabelOn,
-                        ]}
-                      >
-                        CH{chIdx + 1}
-                      </Text>
-                    </TouchableOpacity>
-                  );
-                })}
-              </View>
-            </View>
-          ))}
-        </View>
-
-        {/* TELEMETRY LOG STREAM */}
-        <View style={styles.card}>
-          <Text style={styles.sectionLabel}>
-            MASTER CONTROLLER TELEMETRY LOG:
-          </Text>
+          <Text style={styles.sectionLabel}>CONNECTION & SYNC LOG:</Text>
           <View style={styles.logContainer}>
-            {logs.slice(0, 6).map((log) => (
+            {logs.slice(0, 5).map((log) => (
               <View key={log.id} style={styles.logRow}>
                 <Text style={styles.logTime}>{log.timestamp}</Text>
                 <Text
@@ -1391,7 +1297,7 @@ const styles = StyleSheet.create({
   scrollContent: {
     paddingHorizontal: 16,
     paddingTop: Platform.OS === 'android' ? 42 : 50,
-    paddingBottom: 40,
+    paddingBottom: 36,
   },
   header: {
     width: '100%',
@@ -1405,28 +1311,53 @@ const styles = StyleSheet.create({
   },
   brandTag: {
     color: '#FF671F',
-    fontSize: 21,
+    fontSize: 20,
     fontWeight: '900',
-    letterSpacing: 1.2,
-  },
-  hardwareBadge: {
-    backgroundColor: '#1E293B',
-    paddingVertical: 4,
-    paddingHorizontal: 10,
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: '#334155',
-  },
-  hardwareBadgeText: {
-    color: '#FDB913',
-    fontSize: 10,
-    fontWeight: '800',
-    letterSpacing: 0.5,
+    letterSpacing: 1,
   },
   headerSubtitle: {
     color: '#94A3B8',
     fontSize: 12,
     fontWeight: '600',
+  },
+  statusBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 5,
+    paddingHorizontal: 10,
+    borderRadius: 999,
+    borderWidth: 1,
+  },
+  statusBadgeOnline: {
+    backgroundColor: 'rgba(16, 185, 129, 0.14)',
+    borderColor: 'rgba(16, 185, 129, 0.45)',
+  },
+  statusBadgeOffline: {
+    backgroundColor: 'rgba(239, 68, 68, 0.14)',
+    borderColor: 'rgba(239, 68, 68, 0.45)',
+  },
+  statusDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    marginRight: 6,
+  },
+  dotOnline: {
+    backgroundColor: '#10B981',
+  },
+  dotOffline: {
+    backgroundColor: '#EF4444',
+  },
+  statusBadgeText: {
+    fontSize: 10,
+    fontWeight: '800',
+    letterSpacing: 0.4,
+  },
+  textOnline: {
+    color: '#10B981',
+  },
+  textOffline: {
+    color: '#EF4444',
   },
   card: {
     width: '100%',
@@ -1446,6 +1377,11 @@ const styles = StyleSheet.create({
   cardTitle: {
     color: '#F9FAFB',
     fontSize: 14,
+    fontWeight: '700',
+  },
+  portHintText: {
+    color: '#FDB913',
+    fontSize: 11,
     fontWeight: '700',
   },
   pillBadge: {
@@ -1474,149 +1410,49 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: 'transparent',
   },
-  miniDot: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-    marginRight: 6,
-  },
-  hotspotGuideBox: {
+  infoBox: {
     backgroundColor: '#0B1120',
     borderRadius: 10,
     padding: 10,
-    borderLeftWidth: 3,
-    borderLeftColor: '#FF671F',
-    marginBottom: 10,
-  },
-  hotspotGuideText: {
-    color: '#CBD5E1',
-    fontSize: 12,
-    lineHeight: 18,
-  },
-  highlightText: {
-    color: '#FDB913',
-    fontWeight: '700',
-  },
-  scanRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-  },
-  subnetInputBox: {
-    flex: 1.25,
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#0B1120',
-    borderRadius: 10,
-    paddingHorizontal: 8,
     borderWidth: 1,
     borderColor: '#1E293B',
-    height: 40,
   },
-  subnetLabel: {
-    color: '#64748B',
-    fontSize: 11,
-    marginRight: 4,
-    fontWeight: '600',
-  },
-  subnetInput: {
-    flex: 1,
-    color: '#F8FAFC',
+  infoBoxText: {
+    color: '#CBD5E1',
     fontSize: 12,
-    fontWeight: '700',
-    paddingVertical: 0,
-    paddingHorizontal: 2,
   },
-  pingButton: {
-    backgroundColor: '#1E293B',
-    height: 40,
-    paddingHorizontal: 11,
-    borderRadius: 10,
-    justifyContent: 'center',
-    alignItems: 'center',
-    borderWidth: 1,
-    borderColor: '#334155',
-  },
-  scanButton: {
-    backgroundColor: '#2563EB',
-    height: 40,
-    paddingHorizontal: 12,
-    borderRadius: 10,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  scanButtonDisabled: {
-    opacity: 0.6,
-  },
-  scanLoadingRow: {
+  metersRow: {
     flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-  },
-  scanButtonText: {
-    color: '#FFFFFF',
-    fontSize: 12,
-    fontWeight: '700',
-  },
-  identifyAllButton: {
+    gap: 10,
     marginTop: 10,
-    backgroundColor: 'rgba(253, 185, 19, 0.14)',
-    borderWidth: 1,
-    borderColor: '#FDB913',
-    borderRadius: 10,
-    paddingVertical: 9,
-    paddingHorizontal: 12,
-    alignItems: 'center',
-    justifyContent: 'center',
   },
-  identifyAllButtonText: {
-    color: '#FDB913',
-    fontSize: 12,
-    fontWeight: '800',
+  meterCol: {
+    flex: 1,
   },
-  statusSection: {
-    width: '100%',
-    alignItems: 'center',
-    marginBottom: 12,
-  },
-  statusBadge: {
+  meterLabelRow: {
     flexDirection: 'row',
-    alignItems: 'center',
-    paddingVertical: 8,
-    paddingHorizontal: 18,
-    borderRadius: 999,
-    borderWidth: 1.5,
+    justifyContent: 'space-between',
+    marginBottom: 4,
   },
-  statusBadgeConnected: {
-    backgroundColor: 'rgba(16, 185, 129, 0.12)',
-    borderColor: 'rgba(16, 185, 129, 0.45)',
-  },
-  statusBadgeDisconnected: {
-    backgroundColor: 'rgba(239, 68, 68, 0.12)',
-    borderColor: 'rgba(239, 68, 68, 0.45)',
-  },
-  statusDot: {
-    width: 10,
-    height: 10,
-    borderRadius: 5,
-    marginRight: 8,
-  },
-  dotConnected: {
-    backgroundColor: '#10B981',
-  },
-  dotDisconnected: {
-    backgroundColor: '#EF4444',
-  },
-  statusText: {
-    fontSize: 12,
+  meterLabel: {
+    color: '#94A3B8',
+    fontSize: 10,
     fontWeight: '800',
-    letterSpacing: 0.5,
   },
-  textConnected: {
-    color: '#10B981',
+  meterValue: {
+    color: '#E2E8F0',
+    fontSize: 10,
+    fontWeight: '700',
   },
-  textDisconnected: {
-    color: '#EF4444',
+  meterTrack: {
+    height: 7,
+    backgroundColor: '#1E293B',
+    borderRadius: 4,
+    overflow: 'hidden',
+  },
+  meterFill: {
+    height: '100%',
+    borderRadius: 4,
   },
   masterActionContainer: {
     width: '100%',
@@ -1624,23 +1460,27 @@ const styles = StyleSheet.create({
   },
   masterButton: {
     width: '100%',
-    paddingVertical: 16,
+    paddingVertical: 18,
     paddingHorizontal: 16,
     borderRadius: 16,
     alignItems: 'center',
     justifyContent: 'center',
+    borderWidth: 2,
   },
   masterButtonReady: {
     backgroundColor: '#10B981',
+    borderColor: '#34D399',
   },
   masterButtonStop: {
     backgroundColor: '#EF4444',
+    borderColor: '#F87171',
   },
   masterButtonTitle: {
     color: '#042F2E',
     fontSize: 16,
     fontWeight: '900',
     letterSpacing: 0.6,
+    marginBottom: 3,
   },
   masterButtonTitleStop: {
     color: '#FFFFFF',
@@ -1648,12 +1488,146 @@ const styles = StyleSheet.create({
   masterButtonSub: {
     color: '#064E3B',
     fontSize: 11,
-    fontWeight: '600',
-    marginTop: 4,
-    textAlign: 'center',
+    fontWeight: '700',
   },
   masterButtonSubStop: {
     color: '#FEE2E2',
+  },
+  scanRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginBottom: 12,
+  },
+  subnetFieldBox: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#0B1120',
+    borderRadius: 10,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    borderWidth: 1,
+    borderColor: '#334155',
+  },
+  subnetLabel: {
+    color: '#94A3B8',
+    fontSize: 11,
+    fontWeight: '700',
+    marginRight: 6,
+  },
+  subnetInput: {
+    flex: 1,
+    color: '#F8FAFC',
+    fontSize: 13,
+    fontWeight: '700',
+    padding: 0,
+  },
+  pingButton: {
+    backgroundColor: '#0284C7',
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  scanButton: {
+    backgroundColor: '#FF671F',
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  buttonDisabled: {
+    opacity: 0.6,
+  },
+  scanLoadingRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  buttonText: {
+    color: '#FFFFFF',
+    fontSize: 12,
+    fontWeight: '800',
+  },
+  unitsGrid: {
+    gap: 6,
+  },
+  unitRowCard: {
+    backgroundColor: '#0B1120',
+    borderRadius: 10,
+    paddingVertical: 9,
+    paddingHorizontal: 12,
+    borderWidth: 1,
+  },
+  unitRowOnline: {
+    borderColor: 'rgba(16, 185, 129, 0.45)',
+  },
+  unitRowOffline: {
+    borderColor: '#1E293B',
+  },
+  unitRowHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  unitLeftInfo: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  unitNameText: {
+    color: '#F8FAFC',
+    fontSize: 13,
+    fontWeight: '800',
+    marginRight: 8,
+  },
+  ipPill: {
+    backgroundColor: '#1E293B',
+    paddingVertical: 3,
+    paddingHorizontal: 8,
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: '#334155',
+  },
+  ipPillText: {
+    color: '#94A3B8',
+    fontSize: 11,
+    fontWeight: '600',
+  },
+  unitStateText: {
+    fontSize: 10,
+    fontWeight: '800',
+    letterSpacing: 0.4,
+  },
+  editIpRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginTop: 8,
+  },
+  editIpInput: {
+    flex: 1,
+    backgroundColor: '#111827',
+    color: '#F8FAFC',
+    borderRadius: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    fontSize: 12,
+    borderWidth: 1,
+    borderColor: '#334155',
+  },
+  saveIpButton: {
+    backgroundColor: '#10B981',
+    paddingVertical: 7,
+    paddingHorizontal: 12,
+    borderRadius: 8,
+  },
+  saveIpButtonText: {
+    color: '#042F2E',
+    fontSize: 11,
+    fontWeight: '800',
   },
   sectionLabel: {
     color: '#94A3B8',
@@ -1662,227 +1636,226 @@ const styles = StyleSheet.create({
     letterSpacing: 0.8,
     marginBottom: 10,
   },
-  trackCard: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
+  speedRow: {
+    marginBottom: 14,
     backgroundColor: '#0B1120',
     borderRadius: 12,
     padding: 12,
-    marginBottom: 8,
     borderWidth: 1,
     borderColor: '#1E293B',
   },
-  trackCardSelected: {
-    borderColor: '#FF671F',
-    backgroundColor: 'rgba(255, 103, 31, 0.1)',
+  speedModeToggleRow: {
+    flexDirection: 'row',
+    gap: 8,
+    marginBottom: 12,
   },
-  trackInfo: {
+  speedModeBtn: {
     flex: 1,
-    paddingRight: 10,
+    paddingVertical: 9,
+    paddingHorizontal: 8,
+    borderRadius: 8,
+    backgroundColor: '#0F172A',
+    borderWidth: 1.5,
+    borderColor: '#334155',
+    alignItems: 'center',
+    justifyContent: 'center',
   },
-  trackTitle: {
-    color: '#F1F5F9',
-    fontSize: 13,
-    fontWeight: '700',
-    marginBottom: 2,
+  speedModeBtnActiveAuto: {
+    backgroundColor: 'rgba(0, 229, 255, 0.15)',
+    borderColor: '#00E5FF',
   },
-  trackTitleSelected: {
-    color: '#FF671F',
+  speedModeBtnActiveManual: {
+    backgroundColor: 'rgba(255, 103, 31, 0.2)',
+    borderColor: '#FF671F',
   },
-  trackSubtitle: {
+  speedModeBtnText: {
     color: '#94A3B8',
     fontSize: 11,
-  },
-  trackBadge: {
-    backgroundColor: '#1E293B',
-    paddingVertical: 4,
-    paddingHorizontal: 8,
-    borderRadius: 6,
-  },
-  trackBadgeSelected: {
-    backgroundColor: '#FF671F',
-  },
-  trackBadgeText: {
-    color: '#94A3B8',
-    fontSize: 10,
     fontWeight: '800',
   },
-  trackBadgeTextSelected: {
-    color: '#FFFFFF',
+  speedModeBtnTextActiveAuto: {
+    color: '#00E5FF',
+    fontWeight: '900',
   },
-  relayHintText: {
-    color: '#64748B',
-    fontSize: 11,
-    fontWeight: '600',
+  speedModeBtnTextActiveManual: {
+    color: '#FDB913',
+    fontWeight: '900',
   },
-  unitCard: {
-    backgroundColor: '#0B1120',
-    borderRadius: 12,
-    padding: 12,
-    marginBottom: 10,
-    borderWidth: 1,
-  },
-  unitCardOnline: {
-    borderColor: '#10B981',
-  },
-  unitCardOffline: {
-    borderColor: '#1E293B',
-  },
-  unitHeaderRow: {
+  speedHeaderRow: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    marginBottom: 4,
+    marginBottom: 8,
   },
-  unitTitleRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
+  speedLabel: {
+    color: '#CBD5E1',
+    fontSize: 12,
+    fontWeight: '700',
   },
-  unitNameText: {
-    color: '#F8FAFC',
-    fontSize: 14,
-    fontWeight: '800',
-    marginRight: 8,
-  },
-  ipPill: {
-    backgroundColor: '#1E293B',
-    paddingVertical: 2,
-    paddingHorizontal: 8,
-    borderRadius: 6,
-  },
-  ipPillText: {
-    color: '#38BDF8',
-    fontSize: 11,
-    fontWeight: '600',
-  },
-  unitActionGroup: {
+  speedFineRow: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
   },
-  idUnitButton: {
-    backgroundColor: 'rgba(56, 189, 248, 0.14)',
+  speedStepBtn: {
+    backgroundColor: '#1E293B',
     paddingVertical: 4,
     paddingHorizontal: 8,
     borderRadius: 6,
     borderWidth: 1,
-    borderColor: '#38BDF8',
+    borderColor: '#334155',
   },
-  idUnitButtonText: {
-    color: '#38BDF8',
+  speedStepBtnText: {
+    color: '#E2E8F0',
     fontSize: 11,
-    fontWeight: '700',
+    fontWeight: '800',
   },
-  blinkButton: {
-    backgroundColor: '#1E293B',
+  speedValueBadge: {
+    backgroundColor: 'rgba(255, 103, 31, 0.2)',
     paddingVertical: 4,
     paddingHorizontal: 10,
     borderRadius: 6,
     borderWidth: 1,
-    borderColor: '#334155',
-  },
-  blinkButtonText: {
-    color: '#FDB913',
-    fontSize: 11,
-    fontWeight: '700',
-  },
-  unitRoleText: {
-    color: '#64748B',
-    fontSize: 11,
-    marginBottom: 8,
-  },
-  unitRoleHighlight: {
-    color: '#CBD5E1',
-    fontWeight: '600',
-  },
-  selfIdHighlight: {
-    color: '#FDB913',
-    fontWeight: '700',
-  },
-  editIpRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    marginBottom: 8,
-  },
-  editIpInput: {
-    flex: 1,
-    backgroundColor: '#111827',
-    color: '#FFFFFF',
-    borderRadius: 8,
-    paddingHorizontal: 10,
-    height: 34,
-    fontSize: 12,
-    borderWidth: 1,
-    borderColor: '#38BDF8',
-  },
-  saveIpButton: {
-    backgroundColor: '#10B981',
-    paddingHorizontal: 12,
-    height: 34,
-    borderRadius: 8,
-    justifyContent: 'center',
-  },
-  saveIpButtonText: {
-    color: '#042F2E',
-    fontSize: 12,
-    fontWeight: '800',
-  },
-  boardBankLabel: {
-    color: '#64748B',
-    fontSize: 10,
-    fontWeight: '700',
-    marginBottom: 4,
-  },
-  boardBankLabelSecond: {
-    marginTop: 6,
-  },
-  relayRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    gap: 4,
-  },
-  relayChannelBox: {
-    flex: 1,
-    alignItems: 'center',
-    paddingVertical: 6,
-    borderRadius: 8,
-    borderWidth: 1,
-  },
-  relayChannelOn: {
-    backgroundColor: 'rgba(255, 103, 31, 0.22)',
     borderColor: '#FF671F',
   },
-  relayChannelOnBankB: {
-    backgroundColor: 'rgba(56, 189, 248, 0.22)',
-    borderColor: '#38BDF8',
+  speedValueBadgeAuto: {
+    backgroundColor: 'rgba(0, 229, 255, 0.2)',
+    borderColor: '#00E5FF',
   },
-  relayChannelOff: {
-    backgroundColor: '#111827',
-    borderColor: '#1F2937',
+  speedValueBadgeManual: {
+    backgroundColor: 'rgba(255, 103, 31, 0.2)',
+    borderColor: '#FF671F',
   },
-  relayLed: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-    marginBottom: 4,
+  speedValueBadgeText: {
+    color: '#FDB913',
+    fontSize: 12,
+    fontWeight: '900',
   },
-  relayLedOn: {
+  speedValueBadgeTextAuto: {
+    color: '#00E5FF',
+  },
+  speedValueBadgeTextManual: {
+    color: '#FDB913',
+  },
+  sliderTouchArea: {
+    width: '100%',
+    height: 34,
+    justifyContent: 'center',
+    position: 'relative',
+  },
+  sliderTrack: {
+    width: '100%',
+    height: 10,
+    backgroundColor: '#1E293B',
+    borderRadius: 5,
+    overflow: 'hidden',
+  },
+  sliderFill: {
+    height: '100%',
+    backgroundColor: '#FF671F',
+    borderRadius: 5,
+  },
+  sliderThumb: {
+    position: 'absolute',
+    width: 22,
+    height: 22,
+    marginLeft: -11,
+    borderRadius: 11,
     backgroundColor: '#FDB913',
+    borderWidth: 2.5,
+    borderColor: '#FFFFFF',
   },
-  relayLedOnBankB: {
-    backgroundColor: '#38BDF8',
+  sliderScaleRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginTop: 2,
+    marginBottom: 10,
   },
-  relayLedOff: {
-    backgroundColor: '#334155',
-  },
-  relayChannelLabel: {
+  sliderScaleText: {
     color: '#64748B',
+    fontSize: 10,
+    fontWeight: '600',
+  },
+  speedPillsWrap: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 6,
+  },
+  speedPill: {
+    backgroundColor: '#1E293B',
+    paddingVertical: 6,
+    paddingHorizontal: 11,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#334155',
+  },
+  speedPillActive: {
+    backgroundColor: 'rgba(255, 103, 31, 0.2)',
+    borderColor: '#FF671F',
+  },
+  speedPillText: {
+    color: '#94A3B8',
+    fontSize: 11,
+    fontWeight: '700',
+  },
+  speedPillTextActive: {
+    color: '#FDB913',
+    fontWeight: '900',
+  },
+  patternCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: '#1E293B',
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    borderRadius: 12,
+    marginBottom: 8,
+    borderWidth: 1.5,
+    borderColor: '#334155',
+  },
+  patternCardSelected: {
+    backgroundColor: 'rgba(255, 103, 31, 0.14)',
+    borderColor: '#FF671F',
+  },
+  patternInfo: {
+    flex: 1,
+    paddingRight: 8,
+  },
+  patternTitle: {
+    color: '#F8FAFC',
+    fontSize: 13,
+    fontWeight: '800',
+    marginBottom: 2,
+  },
+  patternTitleSelected: {
+    color: '#FF671F',
+  },
+  patternDesc: {
+    color: '#94A3B8',
+    fontSize: 11,
+    fontWeight: '500',
+  },
+  patternBadge: {
+    paddingVertical: 4,
+    paddingHorizontal: 8,
+    borderRadius: 6,
+  },
+  patternBadgeReactive: {
+    backgroundColor: 'rgba(16, 185, 129, 0.16)',
+  },
+  patternBadgeStandard: {
+    backgroundColor: '#0F172A',
+  },
+  patternBadgeSelected: {
+    backgroundColor: '#FF671F',
+  },
+  patternBadgeText: {
+    color: '#CBD5E1',
     fontSize: 9,
     fontWeight: '800',
   },
-  relayChannelLabelOn: {
+  patternBadgeTextSelected: {
     color: '#FFFFFF',
   },
   logContainer: {
@@ -1895,32 +1868,34 @@ const styles = StyleSheet.create({
   logRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginVertical: 2,
+    marginBottom: 5,
   },
   logTime: {
-    color: '#475569',
+    color: '#64748B',
     fontSize: 10,
+    fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
     marginRight: 6,
   },
   logTag: {
     fontSize: 9,
     fontWeight: '800',
+    paddingHorizontal: 5,
     paddingVertical: 1,
-    paddingHorizontal: 4,
-    borderRadius: 3,
+    borderRadius: 4,
     marginRight: 6,
+    overflow: 'hidden',
   },
   logTx: {
-    backgroundColor: 'rgba(56, 189, 248, 0.15)',
-    color: '#38BDF8',
+    backgroundColor: 'rgba(255, 103, 31, 0.2)',
+    color: '#FF671F',
   },
   logRx: {
-    backgroundColor: 'rgba(16, 185, 129, 0.15)',
+    backgroundColor: 'rgba(16, 185, 129, 0.2)',
     color: '#10B981',
   },
   logSys: {
-    backgroundColor: 'rgba(148, 163, 184, 0.15)',
-    color: '#94A3B8',
+    backgroundColor: 'rgba(56, 189, 248, 0.2)',
+    color: '#38BDF8',
   },
   logText: {
     color: '#CBD5E1',

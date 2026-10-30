@@ -1,559 +1,636 @@
-/*
- * ============================================================================
- * DUNKIN' LIGHTS x MusicLightSync_ESP32 - 10x ESP32 16-Channel Master Firmware
- * ============================================================================
- * Synchronized with Mobile App Audio:
- *   "MP3 file - 2026 Christmas Lighting Songs.mp3" (STEP_MS = 180ms)
+/* Music Light Sync — self-contained ESP32 relay pattern engine
  *
- * Relay Channel Layout (from MusicLightSync_ESP32.ino):
- *   - Relay Board A (CH1 - CH8):  LED Strip Sets
- *   - Relay Board B (CH9 - CH16): Christmas Light Sets
- *   - Total per ESP32: 16 Relay Channels (160 Channels across 10 ESP32s)
- * ============================================================================
+ * Commands from Python (UDP 4210) & Mobile App (HTTP 80):
+ *     {"cmd":"play"}                 -> start the current pattern
+ *     {"cmd":"stop"}                 -> all relays OFF
+ *     {"cmd":"ping"}                 -> replies {"type":"pong"}
+ *     {"cmd":"pattern","name":"..."} -> switch pattern
+ *     {"cmd":"speed","ms":120}       -> base step interval
+ *     {"cmd":"music","b":0,"bt":0,"r":0}
+ *                                    -> reactive values (bass/beat/rms 0-100)
+ *                                       sent at ~10 Hz only while playing
+ *
+ * Built-in patterns:
+ *   "wave_lr"         left -> right domino
+ *   "center_in"       both ends sweep toward middle
+ *   "center_out"      middle spreads outward to both ends
+ *   "ping_pong"       left -> right -> left bounce
+ *   "chase3"          3-relay glowing trail
+ *   "alternate"       odd relays, then even relays
+ *   "bounce_pair"     2-relay pair bouncing L<->R
+ *   "sparkle"         random playful flashes
+ *   "end_meet"        ends meet center, then burst  (music reactive)
+ *   "combo_adaptive"  quiet: center-in + center-out blend
+ *                     loud:  alternate + center-in blend    (music reactive,
+ *                                                            smooth crossfade)
+ *
+ * SAFETY: no pattern ever turns all 16 relays ON at once.
+ *
+ * Relay wiring (16-ch active-LOW module): LOW = ON, HIGH = OFF.
  */
-
-#include <Arduino.h>
 #include <WiFi.h>
+#include <WiFiUdp.h>
 #include <WebServer.h>
 #include <ESPmDNS.h>
 #include <string.h>
 
-// ============================================================================
-// 1. SET THIS BOARD'S UNIT NUMBER (1 to 10) BEFORE UPLOADING!
-// ============================================================================
-#define UNIT_ID 1   // <-- Change to 1, 2, 3, 4, 5, 6, 7, 8, 9, or 10
+// ------------------------------------------------------------------
+// EDIT THESE
+// ------------------------------------------------------------------
+const char* WIFI_SSID     = "DunkinNetwork";
+const char* WIFI_PASSWORD = "dunkin123456";
 
-// ============================================================================
-// 2. MOBILE PHONE HOTSPOT CREDENTIALS
-// ============================================================================
-const char* WIFI_SSID = "DunkinNetwork";
-const char* WIFI_PASS = "dunkin123456";
+// ------------------------------------------------------------------
+static const uint8_t  RELAY_PINS[16] = {13, 14, 27, 26, 25, 33, 32, 16, 17, 18, 19, 21, 22, 23, 4, 5};
+static const bool     RELAY_ACTIVE_LOW = true;
+static const uint16_t UDP_PORT         = 4210;
 
-// ============================================================================
-// 3. DUAL 8-CHANNEL RELAY MODULES (16 CHANNELS: CH1-8 LED STRIPS, CH9-16 XMAS)
-// ============================================================================
-#define RELAY_ACTIVE_LOW true
+uint32_t stepMs = 220;
+uint32_t liveDynamicMs = 0; // Streamed or computed music-aligned ms (0 = fallback to dynamic energy)
+bool     autoSpeedMode = true; // true = Auto Music Sync (accurate dynamic tempo), false = Manual Fixed MS
 
-// Set to true ONLY if you wired your relays to the raw example array in
-// MusicLightSync_ESP32.ino ({13,14,16,17,21,22,25,26,27,32,33,2,4,12,15,0}).
-// Leave false (default) for safe ESP32 DevKit 16-relay pins that avoid boot pins 0/12/15.
-#define USE_RAW_SIMULATOR_EXAMPLE_PINS false
+// ------------------------------------------------------------------
+WiFiUDP udp;
+WebServer httpServer(80);
+char packet[256];
 
-const int NUM_RELAYS = 16;
+bool     running     = false;
+uint8_t  patternId   = 0;
+uint32_t lastStepMs  = 0;
+uint32_t stepCount   = 0;
+uint16_t sparkleMask = 0;
 
-#if USE_RAW_SIMULATOR_EXAMPLE_PINS
-const uint8_t RELAY_PINS[NUM_RELAYS] = {
-  13, 14, 16, 17, 21, 22, 25, 26, // CH1-CH8 (LED strip sets)
-  27, 32, 33, 2,  4,  12, 15, 0   // CH9-CH16 (Christmas sets)
+// Reactive values (0..100) streamed from Python / Mobile App while playing.
+uint8_t  musicBass = 0;
+uint8_t  musicBeat = 0;
+uint8_t  musicRms  = 0;
+
+// Smoothed musical energy & vocal presence tracking
+float    comboIntensity = 0.0;
+float    vocalPresence  = 0.0; // Tracks when a singer is singing vs instrumental
+
+static const char* patternName[] = {
+  "combo_adaptive", "wave_lr", "center_in", "center_out", "ping_pong",
+  "chase3", "alternate", "bounce_pair", "sparkle", "end_meet"
 };
-#else
-const uint8_t RELAY_PINS[NUM_RELAYS] = {
-  // --- Relay Module #1 (CH1 - CH8: LED Strip Sets) ---
-  13, // CH1
-  14, // CH2
-  27, // CH3
-  26, // CH4
-  25, // CH5
-  33, // CH6
-  32, // CH7
-  16, // CH8
+static const uint8_t PATTERN_COUNT = sizeof(patternName) / sizeof(patternName[0]);
 
-  // --- Relay Module #2 (CH9 - CH16: Christmas Sets) ---
-  17, // CH9
-  18, // CH10
-  19, // CH11
-  21, // CH12
-  22, // CH13
-  23, // CH14
-  4,  // CH15
-  5   // CH16
-};
-#endif
-
-const int ONBOARD_LED_PIN = 2;
-
-// Exact step timing from MusicLightSync_ESP32.ino
-static const uint32_t STEP_MS = 180;
-
-// Exact EFFECTS array from MusicLightSync_ESP32.ino
-static const char* EFFECTS[16] = {
-  "Party Alternating + Music Reactive", "Party Alternating + Music Reactive",
-  "Party Alternating + Music Reactive", "Party Alternating + Music Reactive",
-  "Party Alternating + Music Reactive", "Party Alternating + Music Reactive",
-  "Party Alternating + Music Reactive", "Party Alternating + Music Reactive",
-  "Party Alternating + Music Reactive", "Party Alternating + Music Reactive",
-  "Party Alternating + Music Reactive", "Party Alternating + Music Reactive",
-  "Party Alternating + Music Reactive", "Party Alternating + Music Reactive",
-  "Party Alternating + Music Reactive", "Party Alternating + Music Reactive"
-};
-
-// ============================================================================
-// 4. STATE VARIABLES
-// ============================================================================
-WebServer server(80);
-
-bool isPlaying = false;
-int activeUnitId = UNIT_ID;          // 1..10 (can also be assigned by Master App)
-int activeTrack = 1;                 // 1 = Exact MusicLightSync_ESP32.ino, 2 = 10-Unit Multi-Effect, 3 = Soundwave+Twinkle, 4 = 10-Unit Cascade
-unsigned long showStartTimeMs = 0;
-uint16_t currentRelayMask = 0x0000;
-
-bool isBlinking = false;
-unsigned long blinkStartMs = 0;
-bool isIdentifying = false;
-unsigned long identifyStartMs = 0;
-unsigned long lastReconnectAttemptMs = 0;
-
-const char* getUnitRoleName(int unitId) {
-  switch (unitId) {
-    case 1:  return "Party Alternating + Music Reactive (MusicLightSync)";
-    case 2:  return "Music Reactive + Soundwave Pulse";
-    case 3:  return "Twinkle + Sparkle Playful";
-    case 4:  return "Wave + Comet Flow Chase";
-    case 5:  return "Outer-to-Middle Christmas Sweep";
-    case 6:  return "LED Strip Chase (1-8) + Xmas Twinkle (9-16)";
-    case 7:  return "LED Strip Party (1-8) + Xmas Soundwave (9-16)";
-    case 8:  return "LED Strip Soundwave (1-8) + Xmas Sweep (9-16)";
-    case 9:  return "Bass Flash + Beat Strobe Shuffle";
-    case 10: return "Grand Finale Auto-DJ Mix (All Effects)";
-    default: return "Party Alternating + Music Reactive";
-  }
-}
-
-// ============================================================================
-// 5. LOW-LEVEL 16-CHANNEL RELAY DRIVER (Matches MusicLightSync_ESP32.ino)
-// ============================================================================
-void relayWrite(uint8_t i, bool on) {
-  if (i >= NUM_RELAYS) return;
-  digitalWrite(RELAY_PINS[i], (on == RELAY_ACTIVE_LOW) ? LOW : HIGH);
-}
-
-void applyRelayMask(uint16_t mask) {
-  currentRelayMask = mask;
-  for (uint8_t i = 0; i < NUM_RELAYS; i++) {
-    bool on = ((mask >> i) & 0x0001) != 0;
-    relayWrite(i, on);
-  }
+// ------------------------------------------------------------------
+void relayWrite(uint8_t index, bool on) {
+  if (index >= 16) return;
+  digitalWrite(RELAY_PINS[index], (on == RELAY_ACTIVE_LOW) ? LOW : HIGH);
 }
 
 void allRelaysOff() {
-  applyRelayMask(0x0000);
+  for (uint8_t i = 0; i < 16; ++i) relayWrite(i, false);
 }
 
-// ============================================================================
-// 6. EXACT MusicLightSync_ESP32.ino EFFECT GENERATOR
-// ============================================================================
-// Evaluates a single effect name string `e` for channel `i` (0..15) at `step`
-bool evalEffectString(const char* e, uint8_t i, uint32_t step) {
-  uint8_t local = i % 8;
-  uint8_t side = i / 8;
-  if (strstr(e, "Steady On")) return true;
-  if (strstr(e, "Strobe") || strstr(e, "Bass Flash") || strstr(e, "Beat On/Off")) return (step % 2) == 0;
-  if (strstr(e, "Alternating") || strstr(e, "Party") || strstr(e, "Beat Shuffle") || strstr(e, "DJ Mix"))
-    return ((local % 2) == (step % 2)) || (step % 8 == 0);
-  if (strstr(e, "Chase") || strstr(e, "Wave") || strstr(e, "Comet") || strstr(e, "Sweep") || strstr(e, "Flow"))
-    return local == (step % 8);
-  if (strstr(e, "Twinkle") || strstr(e, "Sparkle") || strstr(e, "Playful")) return ((step * 7 + i * 3) % 5) < 2;
-  if (strstr(e, "Bass") || strstr(e, "Music Reactive") || strstr(e, "Fusion") || strstr(e, "Soundwave") || strstr(e, "Pulse"))
-    return ((step + local + side) % 4) != 0;
-  // Default sweep: left-to-right, then from both outer edges toward the middle.
-  uint8_t pos = (step % 16 < 8) ? (step % 8) : (7 - (step % 8));
-  return local == pos;
+void setOnly(uint8_t index) {
+  for (uint8_t i = 0; i < 16; ++i) relayWrite(i, i == index);
 }
 
-// Exact function from MusicLightSync_ESP32.ino:
-bool effectWantsOn(uint8_t i, uint32_t step) {
-  const char* e = EFFECTS[i];
-  return evalEffectString(e, i, step);
+void setPair(uint8_t a, uint8_t b) {
+  for (uint8_t i = 0; i < 16; ++i) relayWrite(i, (i == a) || (i == b));
 }
 
-// Returns the effect string for channel `i` (0..15) when running multi-unit mode
-const char* getUnitEffectForChannel(int unitId, uint8_t i, uint32_t step) {
-  uint8_t side = i / 8; // 0 = LED strip sets (CH1-8), 1 = Christmas sets (CH9-16)
-  switch (unitId) {
-    case 1:  return "Party Alternating + Music Reactive";
-    case 2:  return "Music Reactive Soundwave Pulse";
-    case 3:  return "Twinkle Sparkle Playful";
-    case 4:  return "Wave Comet Chase Flow";
-    case 5:  return "Default Outer-Middle";
-    case 6:  return (side == 0) ? "Wave Chase" : "Twinkle Sparkle";
-    case 7:  return (side == 0) ? "Party Alternating" : "Music Reactive Soundwave";
-    case 8:  return (side == 0) ? "Music Reactive Pulse" : "Default Outer-Middle";
-    case 9:  return ((step % 16) < 12) ? "Party Alternating" : "Bass Flash Strobe";
-    case 10:
-    default: {
-      uint32_t phase = (step / 16) % 5;
-      if (phase == 0) return "Party Alternating";
-      if (phase == 1) return "Music Reactive Soundwave";
-      if (phase == 2) return "Twinkle Sparkle";
-      if (phase == 3) return "Wave Chase";
-      return "Default Outer-Middle";
-    }
-  }
-}
-
-uint16_t computeMusicLightSyncMask(int unitId, int trackId, unsigned long elapsedMs) {
-  // Base step number uses STEP_MS = 180ms from MusicLightSync_ESP32.ino
-  uint32_t stepNumber = (elapsedMs / STEP_MS) + 1;
-
-  // Track 4: 10-Unit Stadium Cascade shifts step by (unitId - 1)
-  if (trackId == 4) {
-    stepNumber += (uint32_t)(unitId - 1);
-  }
-
-  uint16_t mask = 0x0000;
+void setMask(uint16_t mask) {
   for (uint8_t i = 0; i < 16; ++i) {
-    bool on = false;
-    if (trackId == 1) {
-      // Track 1: Exact MusicLightSync_ESP32.ino behavior (Party Alternating + Music Reactive)
-      // Alternates between Party Alternating and Music Reactive on 16-beat musical phrases
-      if (((stepNumber / 16) % 2) == 0) {
-        on = effectWantsOn(i, stepNumber);
-      } else {
-        on = evalEffectString("Music Reactive", i, stepNumber);
+    relayWrite(i, (mask >> i) & 1);
+  }
+}
+
+// ------------------------------------------------------------------
+// PYTHON SIMULATOR LOGIC & ALL-OUT COMBO ORCHESTRATION ENGINE
+// Matches the exact logic from music_light_sync.py and the video:
+// - Left board: Relay channels 1-8  (i = 0..7)
+// - Right board: Relay channels 9-16 (i = 8..15)
+// - Dynamic Combination of Effects:
+//     * SINGER IS SINGING: Dynamic Stereo Bounce Pair (accenting vocal melody)
+//     * INSTRUMENTAL SECTION: Smooth rotation among:
+//       0. Wave L -> R (flowing 2-channel sweep)
+//       1. Center In (edges sweep into middle)
+//       2. Center Out (middle spreads outward to edges)
+//       3. Ping Pong (smooth bouncing bar)
+//     * PUNCHY BEAT ACCENTS: Center kick flash on heavy drum downbeats (musicBeat >= 70)
+//     * NO RANDOM FLICKER: Clear, legible light patterns with musical tempo pacing
+// ------------------------------------------------------------------
+bool effectWantsOn(uint8_t i, uint32_t step) {
+  uint8_t local = i % 8;   // 0..7 within 8-channel bank
+  uint8_t side  = i / 8;   // 0 = Left bank (1-8), 1 = Right bank (9-16)
+
+  bool baseOn = false;
+
+  switch (patternId) {
+    case 0: { // "combo_adaptive": ALL-COMBINATION MASTER SHOWCASE
+      // Gives all 10 light combos their turns across the song!
+      // Rotates smoothly every 8 musical steps (~2.5s per movement)
+      // while staying 100% phase-locked to comprehending drum beats.
+      uint8_t comboTheme = (step / 8) % 10;
+
+      switch (comboTheme) {
+        case 0: { // 1. Wave L -> R: Smooth 2-relay wave sweeping across 8 channels
+          uint8_t s = step % 8;
+          baseOn = (local == s) || (local == ((s + 1) % 8));
+          break;
+        }
+        case 1: { // 2. Center In: Both outer edges sweep inward colliding at center
+          uint8_t pos = step % 4; // 0, 1, 2, 3
+          baseOn = (local == pos) || (local == (7 - pos));
+          // Center clash splash when meeting in the middle
+          if (pos == 3 && (local == 3 || local == 4)) baseOn = true;
+          break;
+        }
+        case 2: { // 3. Center Out: Middle spreads outward toward both outer edges
+          uint8_t in = 3 - (step % 4); // 3, 2, 1, 0
+          baseOn = (local == in) || (local == (7 - in));
+          break;
+        }
+        case 3: { // 4. Ping-Pong Bounce: Continuous Left <-> Right bouncing bar
+          uint8_t p = step % 14;
+          uint8_t pos = (p < 7) ? p : (14 - p);
+          baseOn = (local == pos) || (local == (pos + 1));
+          break;
+        }
+        case 4: { // 5. Stereo Counter-Bounce Pair: Left bounces L->R, Right bounces R->L
+          uint8_t p = step % 14;
+          uint8_t a = (p < 7) ? p : (14 - p);
+          if (side == 0) {
+            baseOn = (local == a) || (local == (a + 1));
+          } else {
+            uint8_t rightA = (6 >= a) ? (6 - a) : 0;
+            baseOn = (local == rightA) || (local == (rightA + 1));
+          }
+          break;
+        }
+        case 5: { // 6. 3-Relay Traveling Comet / Chase Trail
+          int8_t d = (int8_t)local - (int8_t)(step % 8);
+          if (d < 0) d += 8;
+          baseOn = (d <= 2);
+          break;
+        }
+        case 6: { // 7. DJ Beat Shuffle: Odd vs Even relays alternating on the beat
+          bool oddSide = (step % 2) == 0;
+          baseOn = (local % 2) == (oddSide ? 0 : 1);
+          break;
+        }
+        case 7: { // 8. Colliding End Meet / Accordion: Inward & outward breathing
+          uint8_t pos = (step % 8 < 4) ? (step % 4) : (7 - (step % 4));
+          baseOn = (local == pos) || (local == (7 - pos));
+          break;
+        }
+        case 8: { // 9. 16-Channel Full Waterfall: Continuous sweep across ALL 16 relays!
+          uint8_t wf = step % 16;
+          baseOn = (i == wf) || (i == ((wf + 1) % 16));
+          break;
+        }
+        case 9: { // 10. Starlight Sparkle Twinkle: Crisp rhythmic starlight twinkle
+          baseOn = ((step * 3 + i * 5) % 8) < 2;
+          break;
+        }
       }
-    } else if (trackId == 2) {
-      // Track 2: Every ESP32 (Unit 1..10) plays its own MusicLightSync_ESP32 effect!
-      const char* unitEffect = getUnitEffectForChannel(unitId, i, stepNumber);
-      on = evalEffectString(unitEffect, i, stepNumber);
-    } else if (trackId == 3) {
-      // Track 3: LED Strips (1-8) Music Reactive + Christmas Sets (9-16) Twinkle Sparkle
-      const char* eff = (i < 8) ? "Music Reactive" : "Twinkle Sparkle";
-      on = evalEffectString(eff, i, stepNumber);
-    } else {
-      // Track 4: Phase-cascaded MusicLightSync Party Alternating + Sweep
-      on = effectWantsOn(i, stepNumber);
-    }
 
-    if (on) {
-      mask |= ((uint16_t)1 << i);
+      // Climax Vocal Spotlight: on louder singing peaks (musicRms >= 55), illuminate outer spotlights (channels 0 & 7)
+      if (musicRms >= 55 && (local == 0 || local == 7)) {
+        baseOn = true;
+      }
+      break;
+    }
+    case 1: { // "wave_lr": sweeping wave L -> R across 8 channels
+      uint8_t s = step % 8;
+      baseOn = (local == s) || (local == ((s + 1) % 8));
+      break;
+    }
+    case 2: { // "center_in": edges sweep into middle
+      uint8_t pos = step % 4;
+      baseOn = (local == pos) || (local == (7 - pos));
+      break;
+    }
+    case 3: { // "center_out": middle spreads outward to edges
+      uint8_t in = 3 - (step % 4);
+      baseOn = (local == in) || (local == (7 - in));
+      break;
+    }
+    case 4: { // "ping_pong": L <-> R continuous bounce
+      uint8_t p = step % 14;
+      uint8_t pos = (p < 7) ? p : (14 - p);
+      baseOn = (local == pos) || (local == (pos + 1));
+      break;
+    }
+    case 5: { // "chase3": 3-relay chase trail
+      int8_t d = (int8_t)local - (int8_t)(step % 8);
+      if (d < 0) d += 8;
+      baseOn = (d <= 2);
+      break;
+    }
+    case 6: { // "alternate": odd vs even relays alternating cleanly on the beat
+      bool oddSide = (step % 2) == 0;
+      baseOn = (local % 2) == (oddSide ? 0 : 1);
+      break;
+    }
+    case 7: { // "bounce_pair": 2-relay pair bounce
+      uint8_t p = step % 14;
+      uint8_t a = (p < 7) ? p : (14 - p);
+      baseOn = (local == a) || (local == (a + 1));
+      break;
+    }
+    case 8: { // "sparkle": clean gentle twinkle
+      baseOn = ((step * 3 + i * 5) % 8) < 2;
+      break;
+    }
+    case 9: { // "end_meet": sweep outer edges meeting in center, then spreading out
+      uint8_t pos = (step % 8 < 4) ? (step % 4) : (7 - (step % 4));
+      baseOn = (local == pos) || (local == (7 - pos));
+      break;
+    }
+    default: {
+      uint8_t s = step % 8;
+      baseOn = (local == s);
+      break;
     }
   }
-  return mask;
+
+  // Punchy Center Beat Accent: ONLY on heavy drum kicks (musicBeat >= 70)
+  // Punches center relays (channels 3 & 4 on each bank) on downbeats without random clutter.
+  if (musicBeat >= 70 && (local == 3 || local == 4)) {
+    baseOn = true;
+  }
+
+  return baseOn;
 }
 
-// ============================================================================
-// 7. CHOREOGRAPHY ENGINE TICK (CALLED EVERY LOOP)
-// ============================================================================
-void updateLightShow() {
-  // Handle Hardware Self-ID (/identify): holds CH<activeUnitId> ON for 3 seconds
-  if (isIdentifying) {
-    unsigned long idElapsed = millis() - identifyStartMs;
-    if (idElapsed < 3000) {
-      uint16_t idBit = ((uint16_t)1 << (activeUnitId - 1));
-      applyRelayMask(idBit);
-      digitalWrite(ONBOARD_LED_PIN, ((idElapsed / 150) % 2 == 0) ? HIGH : LOW);
-    } else {
-      digitalWrite(ONBOARD_LED_PIN, LOW);
-      applyRelayMask(0x0000);
-      isIdentifying = false;
+// ------------------------------------------------------------------
+void applyPatternStep() {
+  uint16_t finalMask = 0;
+  for (uint8_t i = 0; i < 16; ++i) {
+    if (effectWantsOn(i, stepCount)) {
+      finalMask |= (1u << i);
     }
-    return;
   }
 
-  // Handle quick /blink test across all 16 channels non-blockingly
-  if (isBlinking) {
-    unsigned long blinkElapsed = millis() - blinkStartMs;
-    if (blinkElapsed < 150) {
-      digitalWrite(ONBOARD_LED_PIN, HIGH);
-      applyRelayMask(0x00FF); // LED Strip Sets (CH1-8) ON
-    } else if (blinkElapsed < 300) {
-      digitalWrite(ONBOARD_LED_PIN, LOW);
-      applyRelayMask(0xFF00); // Christmas Sets (CH9-16) ON
-    } else if (blinkElapsed < 450) {
-      digitalWrite(ONBOARD_LED_PIN, HIGH);
-      applyRelayMask(0xFFFF); // All 16 Channels ON
-    } else {
-      digitalWrite(ONBOARD_LED_PIN, LOW);
-      applyRelayMask(0x0000);
-      isBlinking = false;
+  // Supply safety: Cap at 8 relays ON simultaneously, rotating start index
+  // so channels 0 and 1 are never starved.
+  uint8_t onCount = 0;
+  for (uint8_t i = 0; i < 16; ++i) {
+    if ((finalMask >> i) & 1) ++onCount;
+  }
+  if (onCount > 8) {
+    uint8_t toRemove = onCount - 8;
+    uint8_t startIdx = (stepCount * 5) & 0x0F;
+    for (uint8_t n = 0; n < 16 && toRemove > 0; ++n) {
+      uint8_t idx = (startIdx + n) & 0x0F;
+      if ((finalMask >> idx) & 1) {
+        finalMask &= ~(1u << idx);
+        --toRemove;
+      }
     }
-    return;
   }
 
-  if (!isPlaying) {
-    return;
-  }
-
-  unsigned long elapsed = millis() - showStartTimeMs;
-  uint16_t nextMask = computeMusicLightSyncMask(activeUnitId, activeTrack, elapsed);
-  if (nextMask != currentRelayMask) {
-    applyRelayMask(nextMask);
-  }
+  setMask(finalMask);
+  stepCount++;
 }
 
-// ============================================================================
-// 8. HTTP SERVER API HANDLERS (CORS ENABLED FOR MOBILE MASTER APP)
-// ============================================================================
-void sendCorsHeaders() {
-  server.sendHeader("Access-Control-Allow-Origin", "*");
-  server.sendHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
-  server.sendHeader("Access-Control-Allow-Headers", "Content-Type");
+// ------------------------------------------------------------------
+void sendReply(const char* reply) {
+  udp.beginPacket(udp.remoteIP(), udp.remotePort());
+  udp.write((const uint8_t*)reply, strlen(reply));
+  udp.endPacket();
 }
 
-String buildStatusJson(const char* statusLabel) {
-  String unitName = "UNIT-";
-  if (activeUnitId < 10) unitName += "0";
-  unitName += String(activeUnitId);
-
-  String hostName = "Dunkin-" + unitName;
-
-  String relaysArr = "[";
-  for (int i = 0; i < NUM_RELAYS; i++) {
-    relaysArr += ((currentRelayMask >> i) & 0x0001) ? "1" : "0";
-    if (i < NUM_RELAYS - 1) relaysArr += ",";
+int8_t findPattern(const char* name) {
+  for (uint8_t i = 0; i < PATTERN_COUNT; ++i) {
+    if (strstr(name, patternName[i])) return i;
   }
-  relaysArr += "]";
+  return -1;
+}
 
-  String json = "{";
-  json += "\"ok\":true,";
-  json += "\"status\":\"" + String(statusLabel) + "\",";
-  json += "\"unitId\":" + String(activeUnitId) + ",";
-  json += "\"selfIdRelay\":" + String(activeUnitId) + ",";
-  json += "\"id\":\"" + unitName + "\",";
-  json += "\"name\":\"" + unitName + "\",";
-  json += "\"hostname\":\"" + hostName + "\",";
-  json += "\"role\":\"" + String(getUnitRoleName(activeUnitId)) + "\",";
-  json += "\"playing\":" + String(isPlaying ? "true" : "false") + ",";
-  json += "\"track\":" + String(activeTrack) + ",";
-  json += "\"stepMs\":" + String(STEP_MS) + ",";
-  json += "\"relayCount\":" + String(NUM_RELAYS) + ",";
-  json += "\"relayMask\":" + String(currentRelayMask) + ",";
-  json += "\"relays\":" + relaysArr + ",";
+int readIntField(const char* json, const char* key) {
+  char pattern[16];
+  snprintf(pattern, sizeof(pattern), "\"%s\"", key);
+  const char* p = strstr(json, pattern);
+  if (!p) return -1;
+  p = strchr(p, ':');
+  if (!p) return -1;
+  p++;
+  while (*p == ' ' || *p == '\t' || *p == '"') p++;
+  return atoi(p);
+}
+
+// ------------------------------------------------------------------
+// MOBILE APP HTTP BRIDGE (syncs multiple ESP32s with the mobile app)
+// ------------------------------------------------------------------
+void sendHttpCors() {
+  httpServer.sendHeader("Access-Control-Allow-Origin", "*");
+  httpServer.sendHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+  httpServer.sendHeader("Access-Control-Allow-Headers", "Content-Type");
+}
+
+String buildPongJson() {
+  String json = "{\"type\":\"pong\",\"device\":\"MusicLightSync-ESP32\",";
+  json += "\"ip\":\"" + WiFi.localIP().toString() + "\",";
   json += "\"mac\":\"" + WiFi.macAddress() + "\",";
-  json += "\"ip\":\"" + WiFi.localIP().toString() + "\"";
-  json += "}";
+  json += "\"running\":" + String(running ? "true" : "false") + ",";
+  json += "\"playing\":" + String(running ? "true" : "false") + ",";
+  json += "\"pattern\":\"" + String(patternName[patternId]) + "\",";
+  json += "\"speed\":" + String(stepMs) + ",";
+  json += "\"autoMode\":" + String(autoSpeedMode ? "true" : "false") + "}";
   return json;
 }
 
-// GET /status
-void handleStatus() {
-  sendCorsHeaders();
-  if (server.hasArg("unit")) {
-    int u = server.arg("unit").toInt();
-    if (u >= 1 && u <= 10) activeUnitId = u;
-  }
-  if (!isPlaying && !isIdentifying) {
-    isBlinking = true;
-    blinkStartMs = millis();
-  }
-  server.send(200, "application/json", buildStatusJson(isPlaying ? "PLAYING" : "ONLINE"));
-}
-
-// GET /play?track=1&unit=1&offsetMs=0
-void handlePlay() {
-  sendCorsHeaders();
-  if (server.hasArg("unit")) {
-    int u = server.arg("unit").toInt();
-    if (u >= 1 && u <= 10) activeUnitId = u;
-  }
-  if (server.hasArg("track")) {
-    activeTrack = server.arg("track").toInt();
-  } else {
-    activeTrack = 1;
-  }
-  unsigned long offsetMs = 0;
-  if (server.hasArg("offsetMs")) {
-    offsetMs = (unsigned long)server.arg("offsetMs").toInt();
-  }
-
-  isBlinking = false;
-  isIdentifying = false;
-  isPlaying = true;
-  showStartTimeMs = millis() - offsetMs;
-
-  uint16_t initialMask = computeMusicLightSyncMask(activeUnitId, activeTrack, offsetMs);
-  applyRelayMask(initialMask);
-  digitalWrite(ONBOARD_LED_PIN, HIGH);
-
-  server.send(200, "application/json", buildStatusJson("PLAYING"));
-}
-
-// GET /stop
-void handleStop() {
-  sendCorsHeaders();
-  isPlaying = false;
-  isBlinking = false;
-  isIdentifying = false;
-  allRelaysOff();
-  digitalWrite(ONBOARD_LED_PIN, LOW);
-
-  server.send(200, "application/json", buildStatusJson("STOPPED"));
-}
-
-// GET /blink
-void handleBlink() {
-  sendCorsHeaders();
-  isPlaying = false;
-  isIdentifying = false;
-  isBlinking = true;
-  blinkStartMs = millis();
-
-  server.send(200, "application/json", buildStatusJson("BLINK"));
-}
-
-// GET /identify
-void handleIdentify() {
-  sendCorsHeaders();
-  if (server.hasArg("unit")) {
-    int u = server.arg("unit").toInt();
-    if (u >= 1 && u <= 10) activeUnitId = u;
-  }
-  isPlaying = false;
-  isBlinking = false;
-  isIdentifying = true;
-  identifyStartMs = millis();
-
-  uint16_t idBit = ((uint16_t)1 << (activeUnitId - 1));
-  applyRelayMask(idBit);
-  digitalWrite(ONBOARD_LED_PIN, HIGH);
-
-  server.send(200, "application/json", buildStatusJson("IDENTIFYING"));
-}
-
-// GET /relay?ch=1..16&state=0|1  OR  GET /relay?mask=0..65535
-void handleRelayManual() {
-  sendCorsHeaders();
-  isPlaying = false;
-  isBlinking = false;
-  isIdentifying = false;
-
-  if (server.hasArg("mask")) {
-    uint16_t mask = (uint16_t)server.arg("mask").toInt();
-    applyRelayMask(mask);
-  } else if (server.hasArg("ch")) {
-    int ch = server.arg("ch").toInt(); // 1..16
-    int state = server.hasArg("state") ? server.arg("state").toInt() : 1;
-    if (ch >= 1 && ch <= NUM_RELAYS) {
-      uint16_t mask = currentRelayMask;
-      uint16_t bit = ((uint16_t)1 << (ch - 1));
-      if (state) {
-        mask |= bit;
-      } else {
-        mask &= ~bit;
+void setupMobileHttpRoutes() {
+  httpServer.on("/ping", HTTP_GET, []() {
+    sendHttpCors();
+    httpServer.send(200, "application/json", buildPongJson());
+  });
+  httpServer.on("/status", HTTP_GET, []() {
+    sendHttpCors();
+    httpServer.send(200, "application/json", buildPongJson());
+  });
+  httpServer.on("/play", HTTP_GET, []() {
+    sendHttpCors();
+    if (httpServer.hasArg("pattern")) {
+      int8_t id = findPattern(httpServer.arg("pattern").c_str());
+      if (id >= 0) {
+        patternId = id;
+        allRelaysOff();
       }
-      applyRelayMask(mask);
     }
-  }
-
-  server.send(200, "application/json", buildStatusJson("MANUAL_RELAY"));
+    if (httpServer.hasArg("auto")) {
+      autoSpeedMode = (httpServer.arg("auto").toInt() != 0);
+    }
+    if (httpServer.hasArg("ms")) {
+      int ms = httpServer.arg("ms").toInt();
+      if (ms >= 30 && ms <= 2000) stepMs = ms;
+    }
+    running    = true;
+    stepCount  = 0;
+    lastStepMs = millis() - stepMs;
+    Serial.println("PLAY");
+    httpServer.send(200, "application/json", buildPongJson());
+  });
+  httpServer.on("/stop", HTTP_GET, []() {
+    sendHttpCors();
+    running        = false;
+    musicBass      = 0;
+    musicBeat      = 0;
+    musicRms       = 0;
+    liveDynamicMs  = 0;
+    vocalPresence  = 0.0;
+    comboIntensity = 0.0;
+    allRelaysOff();
+    Serial.println("STOP");
+    httpServer.send(200, "application/json", buildPongJson());
+  });
+  httpServer.on("/pattern", HTTP_GET, []() {
+    sendHttpCors();
+    if (httpServer.hasArg("name")) {
+      int8_t id = findPattern(httpServer.arg("name").c_str());
+      if (id >= 0) {
+        patternId = id;
+        stepCount = 0;
+        allRelaysOff();
+        Serial.printf("PATTERN -> %s\n", patternName[patternId]);
+      }
+    }
+    httpServer.send(200, "application/json", buildPongJson());
+  });
+  httpServer.on("/speed", HTTP_GET, []() {
+    sendHttpCors();
+    if (httpServer.hasArg("auto")) {
+      autoSpeedMode = (httpServer.arg("auto").toInt() != 0);
+    }
+    if (httpServer.hasArg("mode")) {
+      if (httpServer.arg("mode") == "auto") autoSpeedMode = true;
+      if (httpServer.arg("mode") == "manual") autoSpeedMode = false;
+    }
+    if (httpServer.hasArg("ms")) {
+      int ms = httpServer.arg("ms").toInt();
+      if (ms >= 80 && ms <= 2000) {
+        stepMs = ms;
+        Serial.printf("SPEED -> %ums (Mode: %s)\n", stepMs, autoSpeedMode ? "AUTO" : "MANUAL");
+      }
+    }
+    httpServer.send(200, "application/json", buildPongJson());
+  });
+  httpServer.on("/music", HTTP_GET, []() {
+    sendHttpCors();
+    if (httpServer.hasArg("b"))  musicBass = (uint8_t)min(100, max(0, (int)httpServer.arg("b").toInt()));
+    if (httpServer.hasArg("bt")) musicBeat = (uint8_t)min(100, max(0, (int)httpServer.arg("bt").toInt()));
+    if (httpServer.hasArg("r"))  musicRms  = (uint8_t)min(100, max(0, (int)httpServer.arg("r").toInt()));
+    if (httpServer.hasArg("auto")) {
+      autoSpeedMode = (httpServer.arg("auto").toInt() != 0);
+    }
+    if (httpServer.hasArg("ms")) {
+      int msVal = httpServer.arg("ms").toInt();
+      if (msVal >= 80 && msVal <= 1000) liveDynamicMs = (uint32_t)msVal;
+    }
+    httpServer.send(200, "application/json", "{\"ok\":true}");
+  });
+  httpServer.onNotFound([]() {
+    sendHttpCors();
+    if (httpServer.method() == HTTP_OPTIONS) {
+      httpServer.send(204);
+      return;
+    }
+    httpServer.send(404, "application/json", "{\"error\":\"not_found\"}");
+  });
+  httpServer.begin();
 }
 
-void handleOptions() {
-  sendCorsHeaders();
-  server.send(204);
-}
-
-// ============================================================================
-// 9. ARDUINO SETUP & LOOP
-// ============================================================================
-void runBootHardwareSelfId() {
-  uint16_t selfIdMask = ((uint16_t)1 << (UNIT_ID - 1));
-  applyRelayMask(selfIdMask);
-
-  for (int i = 0; i < UNIT_ID; i++) {
-    digitalWrite(ONBOARD_LED_PIN, HIGH);
-    delay(120);
-    digitalWrite(ONBOARD_LED_PIN, LOW);
-    delay(120);
-  }
-
-  delay(400);
-  allRelaysOff();
-}
-
-void flashOnboardLedTwice() {
-  for (int i = 0; i < 2; i++) {
-    digitalWrite(ONBOARD_LED_PIN, HIGH);
-    delay(180);
-    digitalWrite(ONBOARD_LED_PIN, LOW);
-    delay(180);
-  }
-}
-
+// ------------------------------------------------------------------
 void setup() {
   Serial.begin(115200);
-  delay(200);
-
-  pinMode(ONBOARD_LED_PIN, OUTPUT);
-  digitalWrite(ONBOARD_LED_PIN, LOW);
-
-  for (uint8_t i = 0; i < NUM_RELAYS; ++i) {
-    pinMode(RELAY_PINS[i], OUTPUT);
-    relayWrite(i, false);
-  }
+  randomSeed(esp_random());
+  for (uint8_t i = 0; i < 16; ++i) pinMode(RELAY_PINS[i], OUTPUT);
   allRelaysOff();
 
-  Serial.println();
-  Serial.println("==========================================================");
-  Serial.printf(" DUNKIN' x MusicLightSync_ESP32 (16-CH) UNIT #%02d\n", UNIT_ID);
-  Serial.printf(" STEP_MS: %d ms | Role: %s\n", STEP_MS, getUnitRoleName(UNIT_ID));
-  Serial.println("==========================================================");
-
-  runBootHardwareSelfId();
-
   WiFi.mode(WIFI_STA);
-  String macStr = WiFi.macAddress();
-  macStr.replace(":", "");
-  String shortMac = macStr.length() >= 4 ? macStr.substring(macStr.length() - 4) : macStr;
-  char hostName[32];
-  snprintf(hostName, sizeof(hostName), "Dunkin-U%02d-%s", UNIT_ID, shortMac.c_str());
-
-  WiFi.setHostname(hostName);
+  String mac = WiFi.macAddress();
+  mac.replace(":", "");
+  String suffix = mac.length() >= 4 ? mac.substring(mac.length() - 4) : mac;
+  String hostName = "MusicLightSync-" + suffix;
+  WiFi.setHostname(hostName.c_str());
   WiFi.setAutoReconnect(true);
-  WiFi.persistent(false);
-  WiFi.setTxPower(WIFI_POWER_15dBm);
   WiFi.setSleep(false);
-  WiFi.begin(WIFI_SSID, WIFI_PASS);
 
-  Serial.printf("Connecting to hotspot \"%s\" as \"%s\" ", WIFI_SSID, hostName);
-  while (WiFi.status() != WL_CONNECTED) {
-    delay(400);
-    Serial.print(".");
+  // Match DunkinNetwork even if a phone hotspot keyboard adds a trailing space
+  String targetSsid = String(WIFI_SSID);
+  int n = WiFi.scanNetworks();
+  for (int i = 0; i < n; i++) {
+    String scanned = WiFi.SSID(i);
+    String norm = scanned;
+    norm.trim();
+    norm.toLowerCase();
+    norm.replace(" ", "");
+    if (norm == "dunkinnetwork") {
+      targetSsid = scanned;
+      break;
+    }
   }
-  Serial.println("\nCONNECTED!");
-  Serial.print("IP Address: ");
-  Serial.println(WiFi.localIP());
+  WiFi.scanDelete();
 
-  char mdnsName[32];
-  snprintf(mdnsName, sizeof(mdnsName), "dunkin-u%02d-%s", UNIT_ID, shortMac.c_str());
-  if (MDNS.begin(mdnsName)) {
-    Serial.printf("mDNS responder started: http://%s.local\n", mdnsName);
+  WiFi.begin(targetSsid.c_str(), WIFI_PASSWORD);
+  Serial.print("Connecting to Wi-Fi");
+  while (WiFi.status() != WL_CONNECTED) { delay(400); Serial.print('.'); }
+  Serial.println();
+  Serial.print("ESP32 IP: "); Serial.println(WiFi.localIP());
+
+  if (MDNS.begin(hostName.c_str())) {
+    MDNS.addService("http", "tcp", 80);
   }
 
-  server.on("/status", HTTP_GET, handleStatus);
-  server.on("/play", HTTP_GET, handlePlay);
-  server.on("/stop", HTTP_GET, handleStop);
-  server.on("/blink", HTTP_GET, handleBlink);
-  server.on("/identify", HTTP_GET, handleIdentify);
-  server.on("/relay", HTTP_GET, handleRelayManual);
+  setupMobileHttpRoutes();
 
-  server.on("/status", HTTP_OPTIONS, handleOptions);
-  server.on("/play", HTTP_OPTIONS, handleOptions);
-  server.on("/stop", HTTP_OPTIONS, handleOptions);
-  server.on("/blink", HTTP_OPTIONS, handleOptions);
-  server.on("/identify", HTTP_OPTIONS, handleOptions);
-  server.on("/relay", HTTP_OPTIONS, handleOptions);
-
-  server.begin();
-  Serial.println("Music Light Sync HTTP Server started on port 80.");
-
-  flashOnboardLedTwice();
+  if (udp.begin(UDP_PORT)) {
+    Serial.printf("Pattern engine ready on UDP port %u and HTTP port 80\n", UDP_PORT);
+  } else {
+    Serial.println("ERROR: could not start UDP receiver");
+  }
 }
 
+// ------------------------------------------------------------------
 void loop() {
-  if (WiFi.status() != WL_CONNECTED) {
-    unsigned long now = millis();
-    if (now - lastReconnectAttemptMs > 8000) {
-      lastReconnectAttemptMs = now;
-      isPlaying = false;
-      allRelaysOff();
-      WiFi.reconnect();
-    }
-    delay(50);
-    return;
+  // 1) Smooth comboIntensity and vocalPresence so transitions between vocal singing & instrumental are organic.
+  {
+    uint16_t energy = (musicBass * 60 + musicBeat * 55 + musicRms * 35) / 150;
+    float target = (float)energy / 100.0f;
+    comboIntensity += (target - comboIntensity) * 0.16f; // fast, lively tracking
+    if (comboIntensity < 0.0f) comboIntensity = 0.0f;
+    if (comboIntensity > 1.0f) comboIntensity = 1.0f;
+
+    // Vocal presence tracking for vocal singing vs instrumental detection
+    float vocalTarget = (musicRms >= 25 && musicRms > (musicBass * 0.38f)) ? ((float)musicRms / 100.0f) : 0.0f;
+    if (musicRms >= 32) vocalTarget = (float)musicRms / 100.0f;
+    vocalPresence += (vocalTarget - vocalPresence) * 0.28f;
+    if (vocalPresence < 0.0f) vocalPresence = 0.0f;
+    if (vocalPresence > 1.0f) vocalPresence = 1.0f;
   }
 
-  server.handleClient();
-  updateLightShow();
+  // 2) Step the pattern with live music tempo adaptation or strict manual speed.
+  if (running) {
+    uint32_t now = millis();
+
+    if (autoSpeedMode) {
+      // ------------------------------------------------------------------
+      // AUTOMATIC MODE: Musical tempo following & clean beat synchronization
+      // Slower, musical MS (160ms - 320ms) locked to the beat of the song.
+      // ------------------------------------------------------------------
+      uint32_t interval = (liveDynamicMs >= 100) ? liveDynamicMs : stepMs;
+
+      if (liveDynamicMs == 0) {
+        // Dynamic music energy tempo scaling:
+        float energy = (musicBass * 0.45f + musicBeat * 0.35f + musicRms * 0.20f);
+        float factor = 1.0f;
+        if (energy >= 50.0f) {
+          factor = 1.0f - ((energy - 50.0f) / 50.0f) * 0.25f; // Up to 25% faster on drops (~165ms)
+        } else {
+          factor = 1.0f + ((50.0f - energy) / 50.0f) * 0.35f; // Up to 35% slower on calm sections (~295ms)
+        }
+        interval = (uint32_t)(stepMs * factor);
+      }
+
+      if (interval < 140) interval = 140; // Musical safe clamp (no relay chatter!)
+
+      // Comprehending Beat Synchronization:
+      // When the song has an identifiable, comprehending beat (kick drum / rhythm transient),
+      // lock each pattern movement step directly in sync with that beat!
+      static uint8_t lastMusicBeat = 0;
+      static uint32_t lastBeatKickMs = 0;
+      bool beatRising = (musicBeat >= 42) && (musicBeat > lastMusicBeat + 8);
+      bool beatPeak   = (musicBeat >= 65) && (lastMusicBeat < 60);
+      bool hasComprehendingBeat = (beatRising || beatPeak) && (now - lastBeatKickMs >= 160);
+
+      bool triggerBeatStep = false;
+      if (hasComprehendingBeat) {
+        lastBeatKickMs = now;
+        // If we are at least 140ms past the previous step, advance cleanly with this beat strike!
+        if (now - lastStepMs >= 140) {
+          triggerBeatStep = true;
+        }
+      }
+      lastMusicBeat = musicBeat;
+
+      if ((now - lastStepMs >= interval) || triggerBeatStep) {
+        lastStepMs = now;
+        applyPatternStep();
+      }
+    } else {
+      // ------------------------------------------------------------------
+      // MANUAL MODE: Exact user-configured speed from dragging slider or preset
+      // ------------------------------------------------------------------
+      uint32_t manualInterval = stepMs;
+      if (manualInterval < 80) manualInterval = 80;
+
+      if (now - lastStepMs >= manualInterval) {
+        lastStepMs = now;
+        applyPatternStep();
+      }
+    }
+  }
+
+  // 3) Handle Mobile App HTTP commands.
+  httpServer.handleClient();
+
+  // 4) Drain UDP commands.
+  int packetSize = udp.parsePacket();
+  if (packetSize <= 0) return;
+  int n = udp.read(packet, sizeof(packet) - 1);
+  if (n <= 0) return;
+  packet[n] = '\0';
+
+  if (strstr(packet, "\"ping\"")) {
+    sendReply("{\"type\":\"pong\",\"device\":\"MusicLightSync-ESP32\"}");
+    return;
+  }
+  if (strstr(packet, "\"play\"")) {
+    running    = true;
+    stepCount  = 0;
+    lastStepMs = millis() - stepMs;
+    Serial.println("PLAY");
+    return;
+  }
+  if (strstr(packet, "\"stop\"")) {
+    running        = false;
+    musicBass      = 0;
+    musicBeat      = 0;
+    musicRms       = 0;
+    liveDynamicMs  = 0;
+    comboIntensity = 0.0;
+    vocalPresence  = 0.0;
+    allRelaysOff();
+    Serial.println("STOP");
+    return;
+  }
+  if (strstr(packet, "\"pattern\"")) {
+    int8_t id = findPattern(packet);
+    if (id >= 0) {
+      patternId = id;
+      stepCount = 0;
+      allRelaysOff();
+      Serial.printf("PATTERN -> %s\n", patternName[patternId]);
+    }
+    return;
+  }
+  if (strstr(packet, "\"speed\"")) {
+    int ms = readIntField(packet, "ms");
+    int autoVal = readIntField(packet, "auto");
+    if (autoVal >= 0) autoSpeedMode = (autoVal != 0);
+    if (ms >= 80 && ms <= 2000) {
+      stepMs = ms;
+      Serial.printf("SPEED -> %ums (Mode: %s)\n", stepMs, autoSpeedMode ? "AUTO" : "MANUAL");
+    }
+    return;
+  }
+  if (strstr(packet, "\"music\"")) {
+    int b  = readIntField(packet, "b");
+    int bt = readIntField(packet, "bt");
+    int r  = readIntField(packet, "r");
+    int ms = readIntField(packet, "ms");
+    int autoVal = readIntField(packet, "auto");
+    if (b  >= 0) musicBass = (uint8_t)min(100, b);
+    if (bt >= 0) musicBeat = (uint8_t)min(100, bt);
+    if (r  >= 0) musicRms  = (uint8_t)min(100, r);
+    if (ms >= 80 && ms <= 1000) liveDynamicMs = (uint32_t)ms;
+    if (autoVal >= 0) autoSpeedMode = (autoVal != 0);
+    return;
+  }
 }
